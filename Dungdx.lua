@@ -13,6 +13,34 @@ local CP = game:GetService("ContentProvider")
 local Stats = game:GetService("Stats")
 local HttpService = game:GetService("HttpService")
 local Cam = WS.CurrentCamera
+-- Metatable hook: hard lock FieldOfView khi POV bật
+local POV_Hook = {installed=false, active=false, target=70}
+local function installPOVHook()
+    if POV_Hook.installed then return true end
+    local ok = pcall(function()
+        if type(getrawmetatable) ~= "function"
+           or type(newcclosure) ~= "function"
+           or type(setreadonly) ~= "function" then
+            error("executor thiếu hàm metatable")
+        end
+        local mt = getrawmetatable(game)
+        local oldNI = mt.__newindex
+        setreadonly(mt, false)
+        mt.__newindex = newcclosure(function(self, key, value)
+            if POV_Hook.active
+               and key == "FieldOfView"
+               and typeof(self) == "Instance"
+               and self:IsA("Camera") then
+                -- Nuốt write của mọi script khác (skill/game), ghi target của mình
+                return oldNI(self, key, POV_Hook.target)
+            end
+            return oldNI(self, key, value)
+        end)
+        setreadonly(mt, true)
+    end)
+    POV_Hook.installed = ok
+    return ok
+end
 
 -- Khởi tạo chắc chắn ở client trước khi tạo GUI.
 local LP = Players.LocalPlayer
@@ -3231,7 +3259,7 @@ end
 
 POV = {
     enabled=false, fov=70, saved=nil, camConn=nil,
-    bindName="DungdxPOVLock",
+    bindName="DungdxPOVLock", useHook=false,
 }
 
 function povApply()
@@ -3244,26 +3272,34 @@ function povStart()
     local cam = WS.CurrentCamera
     POV.saved = cam and cam.FieldOfView or 70
     POV.enabled = true
+    POV_Hook.target = math.clamp(POV.fov, 40, 120)
 
-    -- Unbind nếu còn sót từ lần trước
-    pcall(function() RS:UnbindFromRenderStep(POV.bindName) end)
+    -- Thử hook trước (mượt nhất)
+    POV.useHook = installPOVHook()
+    POV_Hook.active = POV.useHook
 
-    -- Priority = Camera + 1 → chạy NGAY SAU khi camera game update FOV
-    RS:BindToRenderStep(POV.bindName, Enum.RenderPriority.Camera.Value + 1, function()
-        if not POV.enabled then return end
-        local c = WS.CurrentCamera
-        if not c then return end
-        local target = math.clamp(tonumber(POV.fov) or 70, 40, 120)
-        -- Chỉ ghi khi lệch, tránh spam property
-        if math.abs(c.FieldOfView - target) > 0.01 then
-            c.FieldOfView = target
-        end
-    end)
+    if not POV.useHook then
+        -- Fallback: đè mỗi frame sau camera update
+        pcall(function() RS:UnbindFromRenderStep(POV.bindName) end)
+        RS:BindToRenderStep(POV.bindName, Enum.RenderPriority.Camera.Value + 1, function()
+            if not POV.enabled then return end
+            local c = WS.CurrentCamera
+            if not c then return end
+            local target = math.clamp(tonumber(POV.fov) or 70, 40, 120)
+            if math.abs(c.FieldOfView - target) > 0.01 then
+                c.FieldOfView = target
+            end
+        end)
+    end
+
+    -- Áp 1 lần ngay để chắc chắn
+    povApply()
 
     if POV.camConn then pcall(function() POV.camConn:Disconnect() end) end
     POV.camConn = WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
         if POV.enabled then
-            task.wait() -- chờ camera mới gán xong
+            task.wait()
+            POV_Hook.target = math.clamp(POV.fov, 40, 120)
             povApply()
         end
     end)
@@ -3271,6 +3307,7 @@ end
 
 function povStop()
     POV.enabled = false
+    POV_Hook.active = false
     pcall(function() RS:UnbindFromRenderStep(POV.bindName) end)
     if POV.camConn then pcall(function() POV.camConn:Disconnect() end); POV.camConn=nil end
     local cam = WS.CurrentCamera
@@ -3281,6 +3318,7 @@ end
 
 function povSet(v)
     POV.fov = math.clamp(tonumber(v) or 70, 40, 120)
+    POV_Hook.target = POV.fov
     if POV.enabled then povApply() end
 end
 
