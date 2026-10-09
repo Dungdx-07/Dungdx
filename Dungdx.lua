@@ -46,7 +46,7 @@ if not GUI_PARENT then
     return
 end
 
-local AVATAR = "rbxassetid://85947137194506"
+local AVATAR = "rbxassetid://84552655718654"
 local LOGO_IMG = "rbxassetid://91434453184512"
 
 local T = {
