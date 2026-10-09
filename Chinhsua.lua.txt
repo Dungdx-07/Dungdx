@@ -3230,53 +3230,13 @@ end
 -- POV / FOV controller.
 
 POV = {
-    enabled=false, fov=70, saved=nil, camConn=nil, monitorConn=nil,
-    lastCam=nil, lastObservedFov=nil, lastFovChangeAt=0, sampleAcc=0,
+    enabled=false, fov=70, saved=nil, camConn=nil,
+    bindName="DungdxPOVLock",
 }
+
 function povApply()
     local cam = WS.CurrentCamera
-    if not cam then return end
-    POV.lastCam=cam
-    pcall(function() cam.FieldOfView = math.clamp(POV.fov, 40, 120) end)
-    POV.lastObservedFov=POV.fov
-    POV.lastFovChangeAt=os.clock()
-end
-local function povMonitor(dt)
-    if not POV.enabled then return end
-    local cam = WS.CurrentCamera
-    if not cam then return end
-
-    local now = os.clock()
-    local ok, current = pcall(function() return cam.FieldOfView end)
-    if not ok or type(current) ~= "number" then return end
-
-    if cam ~= POV.lastCam then
-        POV.lastCam = cam
-        POV.lastObservedFov = current
-        POV.lastFovChangeAt = now
-        return
-    end
-
-    local target = math.clamp(tonumber(POV.fov) or 70, 40, 120)
-    if math.abs(current - target) <= 0.35 then
-        POV.lastObservedFov = current
-        POV.lastFovChangeAt = now
-        return
-    end
-
-    -- Track even small tween steps from skill/camera scripts. Do not fight the
-    -- animation while it is changing; reapply the selected FOV after it settles.
-    if POV.lastObservedFov == nil or math.abs(current - POV.lastObservedFov) > 0.04 then
-        POV.lastObservedFov = current
-        POV.lastFovChangeAt = now
-        return
-    end
-
-    if now - (POV.lastFovChangeAt or now) >= 0.85 then
-        pcall(function() cam.FieldOfView = target end)
-        POV.lastObservedFov = target
-        POV.lastFovChangeAt = now
-    end
+    if cam then pcall(function() cam.FieldOfView = math.clamp(POV.fov, 40, 120) end) end
 end
 
 function povStart()
@@ -3284,32 +3244,41 @@ function povStart()
     local cam = WS.CurrentCamera
     POV.saved = cam and cam.FieldOfView or 70
     POV.enabled = true
-    POV.lastCam=cam
-    POV.lastObservedFov=cam and cam.FieldOfView or nil
-    POV.lastFovChangeAt=os.clock()
-    POV.sampleAcc=0
-    povApply()
+
+    -- Unbind nếu còn sót từ lần trước
+    pcall(function() RS:UnbindFromRenderStep(POV.bindName) end)
+
+    -- Priority = Camera + 1 → chạy NGAY SAU khi camera game update FOV
+    RS:BindToRenderStep(POV.bindName, Enum.RenderPriority.Camera.Value + 1, function()
+        if not POV.enabled then return end
+        local c = WS.CurrentCamera
+        if not c then return end
+        local target = math.clamp(tonumber(POV.fov) or 70, 40, 120)
+        -- Chỉ ghi khi lệch, tránh spam property
+        if math.abs(c.FieldOfView - target) > 0.01 then
+            c.FieldOfView = target
+        end
+    end)
+
     if POV.camConn then pcall(function() POV.camConn:Disconnect() end) end
     POV.camConn = WS:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
         if POV.enabled then
-            POV.lastCam=nil
-            POV.lastObservedFov=nil
-            POV.lastFovChangeAt=os.clock()
+            task.wait() -- chờ camera mới gán xong
+            povApply()
         end
     end)
-    if POV.monitorConn then pcall(function() POV.monitorConn:Disconnect() end) end
-    POV.monitorConn=RS.RenderStepped:Connect(povMonitor)
 end
+
 function povStop()
     POV.enabled = false
+    pcall(function() RS:UnbindFromRenderStep(POV.bindName) end)
     if POV.camConn then pcall(function() POV.camConn:Disconnect() end); POV.camConn=nil end
-    if POV.monitorConn then pcall(function() POV.monitorConn:Disconnect() end); POV.monitorConn=nil end
     local cam = WS.CurrentCamera
     if cam and POV.saved then pcall(function() cam.FieldOfView = POV.saved end) end
     POV.saved=nil
-    POV.lastCam=nil; POV.lastObservedFov=nil; POV.sampleAcc=0
     syncFeatureUI("POV",false)
 end
+
 function povSet(v)
     POV.fov = math.clamp(tonumber(v) or 70, 40, 120)
     if POV.enabled then povApply() end
