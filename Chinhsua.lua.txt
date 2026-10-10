@@ -74,7 +74,7 @@ if not GUI_PARENT then
     return
 end
 
-local AVATAR = "rbxassetid://85947137194506"
+local AVATAR = "rbxassetid://84552655718654"
 local LOGO_IMG = "rbxassetid://91434453184512"
 
 local T = {
@@ -1416,7 +1416,6 @@ ringGrad.Rotation = 0
 
 local ringScale = Instance.new("UIScale", rgbRing)
 ringScale.Scale = 1
-
 local function syncRing()
     if not Main or not Main.Parent then return end
     rgbRing.Position = Main.Position
@@ -1432,6 +1431,7 @@ syncRing()
 Main:GetPropertyChangedSignal("Position"):Connect(syncRing)
 Main:GetPropertyChangedSignal("Size"):Connect(syncRing)
 uiS:GetPropertyChangedSignal("Scale"):Connect(syncRing)
+
 local function themeApply()
     local selected
     if Theme.mode=="RGB" then
@@ -1494,15 +1494,17 @@ local function themeApply()
         end
     end
 
-       rgbBorder.Color = selected
+        rgbBorder.Color = selected
     if Theme.mode == "RGB" then
-        rgbBorder.Transparency = 1     -- ẩn viền tĩnh
-        rgbRing.Visible = true
-        ringMask.BackgroundColor3 = T.Bg
+        rgbBorder.Transparency = 1
+        if rgbRing then
+            rgbRing.Visible = true
+            ringMask.BackgroundColor3 = T.Bg
+        end
     else
         rgbBorder.Thickness = 2
         rgbBorder.Transparency = .05
-        rgbRing.Visible = false
+        if rgbRing then rgbRing.Visible = false end
         rgbGrad.Enabled = false
     end
     if Theme.previewFrame and Theme.previewFrame.Parent then
@@ -1824,7 +1826,6 @@ _G.__themeHeartbeat = function(dt)
     local speed = math.clamp(tonumber(Theme.rgbSpeed) or 100, 10, 300)
     local step  = math.min(math.max(tonumber(dt) or 0, 0), 0.05)
     Theme._rgbHue = (Theme._rgbHue + (speed/100) * 0.22 * step) % 1
-    -- Xoay gradient → màu cầu vồng chạy vòng quanh khung
     ringGrad.Rotation = (Theme._rgbHue * 360) % 360
 end
 themeApply()
