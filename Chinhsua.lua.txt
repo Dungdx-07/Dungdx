@@ -1376,30 +1376,62 @@ end
 
 -- UIGradient on UIStroke is unreliable in some Roblox clients. Use four
 -- real GuiObject strips so the rainbow is visible on every side of the frame.
-local rgbEdgeItems={}
-local function makeRgbEdge(name,position,size,rotation,phase)
-    local edge=Instance.new("Frame")
-    edge.Name=name
-    edge.Position=position
-    edge.Size=size
-    edge.BackgroundColor3=Color3.new(1,1,1)
-    edge.BorderSizePixel=0
-    edge.Visible=false
-    edge.Active=false
-    edge.ZIndex=20
-    edge.Parent=Main
-    local gradient=Instance.new("UIGradient")
-    gradient.Rotation=rotation
-    gradient.Color=themeRainbowSequence(phase)
-    gradient.Offset=Vector2.new(0,0)
-    gradient.Parent=edge
-    table.insert(rgbEdgeItems,{frame=edge,gradient=gradient,phase=phase})
-end
-makeRgbEdge("__RGBEdgeTop",UDim2.new(0,14,0,1),UDim2.new(1,-28,0,3),0,0)
-makeRgbEdge("__RGBEdgeRight",UDim2.new(1,-4,0,14),UDim2.new(0,3,1,-28),90,.25)
-makeRgbEdge("__RGBEdgeBottom",UDim2.new(0,14,1,-4),UDim2.new(1,-28,0,3),180,.5)
-makeRgbEdge("__RGBEdgeLeft",UDim2.new(0,1,0,14),UDim2.new(0,3,1,-28),270,.75)
+-- ═══════════════ RGB RING (cầu vồng chạy quanh khung) ═══════════════
+local rgbRing = Instance.new("Frame", GUI)
+rgbRing.Name = "__rgbRing"
+rgbRing.AnchorPoint = Vector2.new(.5,.5)
+rgbRing.Position = UDim2.fromScale(.5,.5)
+rgbRing.Size = UDim2.fromOffset(DESIGN_W + 6, DESIGN_H + 6)
+rgbRing.BackgroundColor3 = Color3.new(1,1,1)
+rgbRing.BorderSizePixel = 0
+rgbRing.ZIndex = 0
+rgbRing.Visible = false
+cr(rgbRing, 23)
 
+local ringMask = Instance.new("Frame", rgbRing)
+ringMask.Name = "__ringMask"
+ringMask.Position = UDim2.new(0, 3, 0, 3)
+ringMask.Size = UDim2.new(1, -6, 1, -6)
+ringMask.BackgroundColor3 = T.Bg
+ringMask.BorderSizePixel = 0
+ringMask.ZIndex = 1
+cr(ringMask, 20)
+ringMask:GetPropertyChangedSignal("BackgroundTransparency"):Connect(function()
+    if ringMask.BackgroundTransparency ~= 0 then
+        ringMask.BackgroundTransparency = 0
+    end
+end)
+
+local ringGrad = Instance.new("UIGradient", rgbRing)
+ringGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0/6, Color3.fromRGB(255,0,0)),
+    ColorSequenceKeypoint.new(1/6, Color3.fromRGB(255,255,0)),
+    ColorSequenceKeypoint.new(2/6, Color3.fromRGB(0,255,0)),
+    ColorSequenceKeypoint.new(3/6, Color3.fromRGB(0,255,255)),
+    ColorSequenceKeypoint.new(4/6, Color3.fromRGB(0,0,255)),
+    ColorSequenceKeypoint.new(5/6, Color3.fromRGB(255,0,255)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(255,0,0)),
+})
+ringGrad.Rotation = 0
+
+local ringScale = Instance.new("UIScale", rgbRing)
+ringScale.Scale = 1
+
+local function syncRing()
+    if not Main or not Main.Parent then return end
+    rgbRing.Position = Main.Position
+    rgbRing.AnchorPoint = Main.AnchorPoint
+    rgbRing.Size = UDim2.new(
+        Main.Size.X.Scale, Main.Size.X.Offset + 6,
+        Main.Size.Y.Scale, Main.Size.Y.Offset + 6
+    )
+    ringScale.Scale = uiS.Scale
+    ringMask.BackgroundColor3 = T.Bg
+end
+syncRing()
+Main:GetPropertyChangedSignal("Position"):Connect(syncRing)
+Main:GetPropertyChangedSignal("Size"):Connect(syncRing)
+uiS:GetPropertyChangedSignal("Scale"):Connect(syncRing)
 local function themeApply()
     local selected
     if Theme.mode=="RGB" then
@@ -1462,26 +1494,16 @@ local function themeApply()
         end
     end
 
-    rgbBorder.Color=selected
-    if Theme.mode=="RGB" then
-        rgbBorder.Thickness = 3.5
-        rgbBorder.Transparency = 0
-        -- Keep a cycling base stroke and animate real gradient strips over it.
-        rgbGrad.Enabled = false
-        rgbBorder.Color = Color3.fromHSV(Theme._rgbHue % 1, 1, 1)
-        for _,item in ipairs(rgbEdgeItems) do
-            item.frame.Visible=true
-            item.gradient.Enabled=true
-            item.gradient.Color=themeRainbowSequence((Theme._rgbHue+item.phase)%1)
-        end
+       rgbBorder.Color = selected
+    if Theme.mode == "RGB" then
+        rgbBorder.Transparency = 1     -- ẩn viền tĩnh
+        rgbRing.Visible = true
+        ringMask.BackgroundColor3 = T.Bg
     else
         rgbBorder.Thickness = 2
         rgbBorder.Transparency = .05
-        rgbGrad.Enabled=false
-        for _,item in ipairs(rgbEdgeItems) do
-            item.frame.Visible=false
-            item.gradient.Enabled=false
-        end
+        rgbRing.Visible = false
+        rgbGrad.Enabled = false
     end
     if Theme.previewFrame and Theme.previewFrame.Parent then
         Theme.previewFrame.BackgroundColor3=Theme.color
@@ -1794,23 +1816,16 @@ local function openThemeColorPicker()
     setColor(current)
 end
 
-_G.__themeHeartbeat=function(dt)
-    if Theme.mode~="RGB" then
-        if rgbGrad.Enabled then rgbGrad.Enabled=false end
+_G.__themeHeartbeat = function(dt)
+    if Theme.mode ~= "RGB" then
+        if rgbRing and rgbRing.Visible then rgbRing.Visible = false end
         return
     end
-    if rgbGrad.Enabled then rgbGrad.Enabled=false end
-    local speed=math.clamp(tonumber(Theme.rgbSpeed) or 100,10,300)
-    local step=math.min(math.max(tonumber(dt) or 0,0),0.05)
-    -- A time-based hue shift gives frame-rate-independent, smooth color flow.
-    Theme._rgbHue=(Theme._rgbHue + (speed/100)*0.22*step)%1
-    rgbBorder.Color=Color3.fromHSV(Theme._rgbHue,1,1)
-    rgbBorder.Transparency=0
-    for _,item in ipairs(rgbEdgeItems) do
-        if item.frame.Parent then
-            item.gradient.Color=themeRainbowSequence((Theme._rgbHue+item.phase)%1)
-        end
-    end
+    local speed = math.clamp(tonumber(Theme.rgbSpeed) or 100, 10, 300)
+    local step  = math.min(math.max(tonumber(dt) or 0, 0), 0.05)
+    Theme._rgbHue = (Theme._rgbHue + (speed/100) * 0.22 * step) % 1
+    -- Xoay gradient → màu cầu vồng chạy vòng quanh khung
+    ringGrad.Rotation = (Theme._rgbHue * 360) % 360
 end
 themeApply()
 
