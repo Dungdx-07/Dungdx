@@ -49,21 +49,22 @@ if not LP then
 end
 
 local GUI_PARENT = (function()
-    -- Executor hỗ trợ gethui: ưu tiên parent riêng của executor.
-    local ok, hui = pcall(function()
-        if type(gethui) == "function" then return gethui() end
-        return nil
-    end)
-    if ok and typeof(hui) == "Instance" then return hui end
-
-    -- Nếu không có gethui, chờ PlayerGui sẵn sàng.
+    -- Delta: ưu tiên PlayerGui để ScreenGui được render ổn định trong client.
     local playerGui
     pcall(function()
-        playerGui = LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 15)
+        playerGui = LP:FindFirstChildOfClass("PlayerGui")
+            or LP:WaitForChild("PlayerGui", 15)
     end)
     if playerGui and playerGui:IsA("PlayerGui") then return playerGui end
 
-    -- Dự phòng cho môi trường client không cung cấp PlayerGui đúng lúc.
+    -- Dự phòng cho executor có vùng GUI riêng.
+    local hui
+    pcall(function()
+        if type(gethui) == "function" then hui = gethui() end
+    end)
+    if hui and typeof(hui) == "Instance" then return hui end
+
+    -- Dự phòng cuối cùng.
     local coreGui
     pcall(function() coreGui = game:GetService("CoreGui") end)
     if coreGui and typeof(coreGui) == "Instance" then return coreGui end
@@ -124,13 +125,30 @@ end
 
 local GUI = Instance.new("ScreenGui")
 GUI.Name="DungdxPvP"; GUI.ResetOnSpawn=false; GUI.IgnoreGuiInset=true
-GUI.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; GUI.DisplayOrder=9999; GUI.Parent=GUI_PARENT
+GUI.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; GUI.DisplayOrder=9999
+local parented = pcall(function() GUI.Parent = GUI_PARENT end)
+if not parented or not GUI.Parent then
+    -- Try the normal player UI again before falling back to executor/CoreGui.
+    local playerGui
+    pcall(function()
+        playerGui = LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 10)
+    end)
+    if playerGui and playerGui:IsA("PlayerGui") then
+        local ok = pcall(function() GUI.Parent = playerGui end)
+        parented = ok and GUI.Parent == playerGui
+    end
+end
+if not parented or not GUI.Parent then
+    warn("[DungdxPvP] Delta không gắn được ScreenGui vào PlayerGui/gethui/CoreGui.")
+    pcall(function() GUI:Destroy() end)
+    return
+end
 
 local DESIGN_W,DESIGN_H = 820,520
 local Main = Instance.new("Frame",GUI)
 Main.AnchorPoint=Vector2.new(.5,.5); Main.Position=UDim2.fromScale(.5,.5)
 Main.Size=UDim2.fromOffset(DESIGN_W,DESIGN_H); Main.BackgroundColor3=T.Bg
-Main.BorderSizePixel=0; Main.ClipsDescendants=true; cr(Main,20); sk(Main,T.Stroke,1.5)
+Main.BorderSizePixel=0; Main.ClipsDescendants=true; Main.Visible=true; cr(Main,20); sk(Main,T.Stroke,1.5)
 
 -- Optional Roblox image background used by the "Ảnh nền" theme.
 -- It is created before the rest of the UI so controls stay above it.
@@ -1376,39 +1394,66 @@ end
 
 -- UIGradient on UIStroke is unreliable in some Roblox clients. Use four
 -- real GuiObject strips so the rainbow is visible on every side of the frame.
-local rgbEdgeItems={}
-local function makeRgbEdge(name,position,size,rotation,phase)
-    local edge=Instance.new("Frame")
-    edge.Name=name
-    edge.Position=position
-    edge.Size=size
-    edge.BackgroundColor3=Color3.new(1,1,1)
-    edge.BorderSizePixel=0
-    edge.Visible=false
-    edge.Active=false
-    edge.ZIndex=20
-    edge.Parent=Main
-    local gradient=Instance.new("UIGradient")
-    gradient.Rotation=rotation
-    gradient.Color=themeRainbowSequence(phase)
-    gradient.Offset=Vector2.new(0,0)
-    gradient.Parent=edge
-    table.insert(rgbEdgeItems,{frame=edge,gradient=gradient,phase=phase})
-end
-makeRgbEdge("__RGBEdgeTop",UDim2.new(0,14,0,1),UDim2.new(1,-28,0,3),0,0)
-makeRgbEdge("__RGBEdgeRight",UDim2.new(1,-4,0,14),UDim2.new(0,3,1,-28),90,.25)
-makeRgbEdge("__RGBEdgeBottom",UDim2.new(0,14,1,-4),UDim2.new(1,-28,0,3),180,.5)
-makeRgbEdge("__RGBEdgeLeft",UDim2.new(0,1,0,14),UDim2.new(0,3,1,-28),270,.75)
+-- ═══════════════ RGB RING (cầu vồng chạy quanh khung) ═══════════════
+local rgbRing = Instance.new("Frame", GUI)
+rgbRing.Name = "__rgbRing"
+rgbRing.AnchorPoint = Vector2.new(.5,.5)
+rgbRing.Position = UDim2.fromScale(.5,.5)
+rgbRing.Size = UDim2.fromOffset(DESIGN_W + 6, DESIGN_H + 6)
+rgbRing.BackgroundColor3 = Color3.new(1,1,1)
+rgbRing.BorderSizePixel = 0
+rgbRing.ZIndex = 0
+rgbRing.Visible = false
+cr(rgbRing, 23)
 
-local function themeApply()
-    local selected
-    if Theme.mode=="RGB" then
-        selected=Color3.fromHSV(Theme._rgbHue%1,1,1)
-    elseif Theme.mode=="Neon" then
-        selected=themeNeon(Theme.color,Theme.intensity,Theme.brightness)
-    else
-        selected=Theme.color
+local ringMask = Instance.new("Frame", rgbRing)
+ringMask.Name = "__ringMask"
+ringMask.Position = UDim2.new(0, 3, 0, 3)
+ringMask.Size = UDim2.new(1, -6, 1, -6)
+ringMask.BackgroundColor3 = T.Bg
+ringMask.BorderSizePixel = 0
+ringMask.ZIndex = 1
+cr(ringMask, 20)
+ringMask:GetPropertyChangedSignal("BackgroundTransparency"):Connect(function()
+    if ringMask.BackgroundTransparency ~= 0 then
+        ringMask.BackgroundTransparency = 0
     end
+end)
+
+local ringGrad = Instance.new("UIGradient", rgbRing)
+ringGrad.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0/6, Color3.fromRGB(255,0,0)),
+    ColorSequenceKeypoint.new(1/6, Color3.fromRGB(255,255,0)),
+    ColorSequenceKeypoint.new(2/6, Color3.fromRGB(0,255,0)),
+    ColorSequenceKeypoint.new(3/6, Color3.fromRGB(0,255,255)),
+    ColorSequenceKeypoint.new(4/6, Color3.fromRGB(0,0,255)),
+    ColorSequenceKeypoint.new(5/6, Color3.fromRGB(255,0,255)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(255,0,0)),
+})
+ringGrad.Rotation = 0
+
+local ringScale = Instance.new("UIScale", rgbRing)
+ringScale.Scale = 1
+local function syncRing()
+    if not Main or not Main.Parent then return end
+    rgbRing.Position = Main.Position
+    rgbRing.AnchorPoint = Main.AnchorPoint
+    rgbRing.Size = UDim2.new(
+        Main.Size.X.Scale, Main.Size.X.Offset + 6,
+        Main.Size.Y.Scale, Main.Size.Y.Offset + 6
+    )
+    ringScale.Scale = uiS.Scale
+    ringMask.BackgroundColor3 = T.Bg
+end
+syncRing()
+Main:GetPropertyChangedSignal("Position"):Connect(syncRing)
+Main:GetPropertyChangedSignal("Size"):Connect(syncRing)
+uiS:GetPropertyChangedSignal("Scale"):Connect(syncRing)
+Main:GetPropertyChangedSignal("Visible"):Connect(function()
+    if rgbRing then rgbRing.Visible = (Theme.mode == "RGB" and Main.Visible) end
+end)
+
+local function applyThemeAccent(selected)
     local oldAccent=T.Accent
     local oldAccent2=T.Accent2
     local oldOn=T.On
@@ -1422,7 +1467,11 @@ local function themeApply()
     T.On=selected
 
     for d in pairs(ThemeTracked) do
-        if d and d.Parent and d.Name~="__rgbBorder" then
+        -- Keep the independent rainbow frame's gradient intact; only recolor the
+        -- regular interface accents, not the rainbow's own color stops.
+        local isRGBDecoration = d == rgbBorder or d == rgbGrad
+            or (rgbRing and (d == rgbRing or d:IsDescendantOf(rgbRing)))
+        if d and d.Parent and not isRGBDecoration then
             if d:IsA("UIStroke") then
                 if themeSame(d.Color,oldAccent) or themeSame(d.Color,oldOn) or themeSame(d.Color,DEFAULT_A1) then
                     d.Color=selected
@@ -1462,26 +1511,30 @@ local function themeApply()
         end
     end
 
-    rgbBorder.Color=selected
+    if rgbBorder then rgbBorder.Color = selected end
+end
+
+local function themeApply()
+    local selected
     if Theme.mode=="RGB" then
-        rgbBorder.Thickness = 3.5
-        rgbBorder.Transparency = 0
-        -- Keep a cycling base stroke and animate real gradient strips over it.
-        rgbGrad.Enabled = false
-        rgbBorder.Color = Color3.fromHSV(Theme._rgbHue % 1, 1, 1)
-        for _,item in ipairs(rgbEdgeItems) do
-            item.frame.Visible=true
-            item.gradient.Enabled=true
-            item.gradient.Color=themeRainbowSequence((Theme._rgbHue+item.phase)%1)
+        selected=Color3.fromHSV(Theme._rgbHue%1,1,1)
+    elseif Theme.mode=="Neon" then
+        selected=themeNeon(Theme.color,Theme.intensity,Theme.brightness)
+    else
+        selected=Theme.color
+    end
+    applyThemeAccent(selected)
+    if Theme.mode == "RGB" then
+        rgbBorder.Transparency = 1
+        if rgbRing then
+            rgbRing.Visible = Main.Visible
+            ringMask.BackgroundColor3 = T.Bg
         end
     else
         rgbBorder.Thickness = 2
         rgbBorder.Transparency = .05
-        rgbGrad.Enabled=false
-        for _,item in ipairs(rgbEdgeItems) do
-            item.frame.Visible=false
-            item.gradient.Enabled=false
-        end
+        if rgbRing then rgbRing.Visible = false end
+        rgbGrad.Enabled = false
     end
     if Theme.previewFrame and Theme.previewFrame.Parent then
         Theme.previewFrame.BackgroundColor3=Theme.color
@@ -1794,22 +1847,27 @@ local function openThemeColorPicker()
     setColor(current)
 end
 
-_G.__themeHeartbeat=function(dt)
-    if Theme.mode~="RGB" then
-        if rgbGrad.Enabled then rgbGrad.Enabled=false end
+local rgbThemeRefreshElapsed = 0
+_G.__themeHeartbeat = function(dt)
+    if Theme.mode ~= "RGB" then
+        if rgbRing and rgbRing.Visible then rgbRing.Visible = false end
+        rgbThemeRefreshElapsed = 0
         return
     end
-    if rgbGrad.Enabled then rgbGrad.Enabled=false end
-    local speed=math.clamp(tonumber(Theme.rgbSpeed) or 100,10,300)
-    local step=math.min(math.max(tonumber(dt) or 0,0),0.05)
-    -- A time-based hue shift gives frame-rate-independent, smooth color flow.
-    Theme._rgbHue=(Theme._rgbHue + (speed/100)*0.22*step)%1
-    rgbBorder.Color=Color3.fromHSV(Theme._rgbHue,1,1)
-    rgbBorder.Transparency=0
-    for _,item in ipairs(rgbEdgeItems) do
-        if item.frame.Parent then
-            item.gradient.Color=themeRainbowSequence((Theme._rgbHue+item.phase)%1)
-        end
+    local speed = math.clamp(tonumber(Theme.rgbSpeed) or 100, 10, 300)
+    local step  = math.min(math.max(tonumber(dt) or 0, 0), 0.05)
+    Theme._rgbHue = (Theme._rgbHue + (speed/100) * 0.22 * step) % 1
+    ringGrad.Rotation = (Theme._rgbHue * 360) % 360
+
+    -- The RGB ring is a separate sibling of Main, so explicitly follow visibility.
+    if rgbRing then rgbRing.Visible = Main.Visible end
+
+    -- Keep sliders, switch tracks, active buttons, labels and matching UI gradients
+    -- in the same RGB cycle as the frame without running the full themeApply() each frame.
+    rgbThemeRefreshElapsed = rgbThemeRefreshElapsed + step
+    if rgbThemeRefreshElapsed >= 0.06 then
+        rgbThemeRefreshElapsed = 0
+        applyThemeAccent(Color3.fromHSV(Theme._rgbHue % 1, 1, 1))
     end
 end
 themeApply()
@@ -4800,19 +4858,20 @@ if not extOk then
     cr(errLbl, 10)
 end
 
+_G.__DungdxPvPUi = {}
 -- ═══════════════ NEON + PRESS ═══════════════
-local Ne = {en=false,pr=true,tb=.8,pu=true}
-local function nz(c)
+_G.__DungdxPvPUi.Ne = {en=false,pr=true,tb=.8,pu=true}
+_G.__DungdxPvPUi.nz = function(c)
     local h,s,v=Color3.toHSV(c)
     s=math.min(1,s*1.4+.15); v=math.min(1,v*1.15+.25)
     return Color3.fromHSV(h,s,v)
 end
-local function nSt(st)
+_G.__DungdxPvPUi.nSt = function(st)
     if not st or not st.Parent then return end
     if st:GetAttribute("__n") then return end
     st:SetAttribute("__n",true)
-    local b=st.Color; local br=nz(b); st.Transparency=0
-    if st.Thickness<1.5+Ne.tb then st.Thickness=1.5+Ne.tb end
+    local b=st.Color; local br=_G.__DungdxPvPUi.nz(b); st.Transparency=0
+    if st.Thickness<1.5+_G.__DungdxPvPUi.Ne.tb then st.Thickness=1.5+_G.__DungdxPvPUi.Ne.tb end
     st.Color=br
     local g=Instance.new("UIGradient",st); g.Name="__ng"
     g.Color=ColorSequence.new({
@@ -4822,7 +4881,7 @@ local function nSt(st)
     })
     g.Rotation=45
 end
-local function atP(b)
+_G.__DungdxPvPUi.atP = function(b)
     if not b or not b.Parent then return end
     if b:GetAttribute("__NoPressScale") then return end
     if b:FindFirstAncestor("VFXColorOverlay") then return end
@@ -4845,47 +4904,48 @@ local function atP(b)
     b.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.Touch then dn() end end)
     b.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.Touch then up() end end)
 end
-local function scN()
+_G.__DungdxPvPUi.scN = function()
     for _,i in ipairs(GUI:GetDescendants()) do
-        if i:IsA("UIStroke") and Ne.en then nSt(i)
-        elseif (i:IsA("TextButton") or i:IsA("ImageButton")) and Ne.pr then atP(i) end
+        if i:IsA("UIStroke") and _G.__DungdxPvPUi.Ne.en then _G.__DungdxPvPUi.nSt(i)
+        elseif (i:IsA("TextButton") or i:IsA("ImageButton")) and _G.__DungdxPvPUi.Ne.pr then _G.__DungdxPvPUi.atP(i) end
     end
 end
-local uiDescendantAddedConn=trackPersistent(GUI.DescendantAdded:Connect(function(i)
+_G.__DungdxPvPUi.uiDescendantAddedConn=trackPersistent(GUI.DescendantAdded:Connect(function(i)
     task.defer(function()
-        if i:IsA("UIStroke") and Ne.en then nSt(i)
-        elseif (i:IsA("TextButton") or i:IsA("ImageButton")) and Ne.pr then atP(i) end
+        if i:IsA("UIStroke") and _G.__DungdxPvPUi.Ne.en then _G.__DungdxPvPUi.nSt(i)
+        elseif (i:IsA("TextButton") or i:IsA("ImageButton")) and _G.__DungdxPvPUi.Ne.pr then _G.__DungdxPvPUi.atP(i) end
     end)
 end))
-scN()
+_G.__DungdxPvPUi.scN()
 
-local Tgl=Instance.new("TextButton",GUI)
-Tgl.Size=UDim2.fromOffset(58,58); Tgl.Position=UDim2.new(0,16,.5,-29)
-Tgl.BackgroundColor3=T.Accent2; Tgl.Text=""; Tgl.BorderSizePixel=0
-Tgl.AutoButtonColor=false; Tgl.Visible=false; cr(Tgl,29)
-sk(Tgl,T.Accent,2,.3)
-gr(Tgl,Color3.fromRGB(96,165,250),Color3.fromRGB(37,99,235))
-dg(Tgl)
-local tImg=Instance.new("ImageLabel",Tgl)
-tImg.Size=UDim2.fromScale(1,1); tImg.BackgroundTransparency=1
-tImg.Image=AVATAR; tImg.ScaleType=Enum.ScaleType.Crop; tImg.ZIndex=2; cr(tImg,29)
+_G.__DungdxPvPUi.Tgl=Instance.new("TextButton",GUI)
+_G.__DungdxPvPUi.Tgl.Size=UDim2.fromOffset(58,58); _G.__DungdxPvPUi.Tgl.Position=UDim2.new(0,16,.5,-29)
+_G.__DungdxPvPUi.Tgl.BackgroundColor3=T.Accent2; _G.__DungdxPvPUi.Tgl.Text=""; _G.__DungdxPvPUi.Tgl.BorderSizePixel=0
+_G.__DungdxPvPUi.Tgl.AutoButtonColor=false; _G.__DungdxPvPUi.Tgl.Visible=false; cr(_G.__DungdxPvPUi.Tgl,29)
+sk(_G.__DungdxPvPUi.Tgl,T.Accent,2,.3)
+gr(_G.__DungdxPvPUi.Tgl,Color3.fromRGB(96,165,250),Color3.fromRGB(37,99,235))
+dg(_G.__DungdxPvPUi.Tgl)
+_G.__DungdxPvPUi.tImg=Instance.new("ImageLabel",_G.__DungdxPvPUi.Tgl)
+_G.__DungdxPvPUi.tImg.Size=UDim2.fromScale(1,1); _G.__DungdxPvPUi.tImg.BackgroundTransparency=1
+_G.__DungdxPvPUi.tImg.Image=AVATAR; _G.__DungdxPvPUi.tImg.ScaleType=Enum.ScaleType.Crop; _G.__DungdxPvPUi.tImg.ZIndex=2; cr(_G.__DungdxPvPUi.tImg,29)
 -- Only the floating reopen button remains when the main UI is hidden.
 -- The external "by Dungdx" label was removed; credit remains in the Info tab.
-_G.__tgl=Tgl
-Tgl.MouseButton1Click:Connect(function()
-    Main.Visible=true; Tgl.Visible=false
+_G.__tgl=_G.__DungdxPvPUi.Tgl
+_G.__DungdxPvPUi.Tgl.MouseButton1Click:Connect(function()
+    Main.Visible=true; _G.__DungdxPvPUi.Tgl.Visible=false
     if Theme.mode=="RGB" then themeApply() end
 end)
 Cl.MouseButton1Click:Connect(function()
     local api=_G.DungdxPvP
     if api and api.Destroy then pcall(function() api:Destroy() end) else GUI:Destroy() end
 end)
-Mn.MouseButton1Click:Connect(function() Main.Visible=false; Tgl.Visible=true end)
+Mn.MouseButton1Click:Connect(function() Main.Visible=false; if rgbRing then rgbRing.Visible=false end; _G.__DungdxPvPUi.Tgl.Visible=true end)
 trackPersistent(UIS.InputBegan:Connect(function(i,g)
     if g then return end
     if i.KeyCode==Enum.KeyCode.RightShift then
         Main.Visible=not Main.Visible
-        Tgl.Visible=not Main.Visible
+        if rgbRing then rgbRing.Visible=(Main.Visible and Theme.mode=="RGB") end
+        _G.__DungdxPvPUi.Tgl.Visible=not Main.Visible
     end
 end))
 task.defer(applyScale); task.delay(.1,applyScale)
@@ -4943,7 +5003,6 @@ _G.DungdxPvP = {
         for _, conn in ipairs(persistentConnections) do pcall(function() conn:Disconnect() end) end
         table.clear(persistentConnections)
         if espRenderConn then pcall(function() espRenderConn:Disconnect() end); espRenderConn=nil end
-        if uiDescendantAddedConn then pcall(function() uiDescendantAddedConn:Disconnect() end); uiDescendantAddedConn=nil end
         if themeTrackRemovingConn then pcall(function() themeTrackRemovingConn:Disconnect() end); themeTrackRemovingConn=nil end
         pcall(function()
             for _, c in ipairs(GUI:GetChildren()) do
@@ -4953,7 +5012,7 @@ _G.DungdxPvP = {
             _G.__themeHeartbeat=nil
         end)
         pcall(function() GUI:Destroy() end)
-        _G.DungdxPvP=nil; _G.__tgl=nil
+        _G.DungdxPvP=nil; _G.__tgl=nil; _G.__DungdxPvPUi=nil
     end
 }
 
