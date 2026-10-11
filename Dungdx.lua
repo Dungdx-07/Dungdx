@@ -8276,6 +8276,2381 @@ end)
             pianoStatusLbl.TextColor3 = T.Danger
         end
     end)
+    -- ═══════════════ 🎯 AIM TRAINER — TOGGLE ĐIỀU KHIỂN TRỌN VÒNG ĐỜI ═══════════════
+    -- BẬT  → compile & chạy code nhúng sẵn
+    -- TẮT  → gỡ sạch: hook destroy (nếu có) + ScreenGui mới + Sound mới
+    -- Script chính KHÔNG bị ảnh hưởng.
+
+    local AIM_TRAINER_SOURCE = [==[
+-- ============================================================
+-- Dungdx Aim Trainer v11.1 - NEXUS ULTIMATE / INVISIBLE CORNER RESIZE & RGB FRAME
+-- ============================================================
+
+local Players          = game:GetService("Players")
+local TweenService     = game:GetService("TweenService")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local SoundService     = game:GetService("SoundService")
+local GuiService       = game:GetService("GuiService")
+local HttpService      = game:GetService("HttpService")
+
+-- Persistent profile storage. In executor environments this uses readfile/writefile.
+-- A normal Roblox LocalScript cannot write DataStores; that requires a server Script.
+local PROFILE_FILE = "DungdxAimTrainer_Nexus_v11_profile.json"
+local saveProfile
+local function loadProfileData()
+    if type(readfile) ~= "function" then return nil end
+    local okRead, raw = pcall(readfile, PROFILE_FILE)
+    if not okRead or type(raw) ~= "string" or #raw > 250000 then return nil end
+    local okDecode, data = pcall(function() return HttpService:JSONDecode(raw) end)
+    if not okDecode or type(data) ~= "table" or data.Version ~= 1 then return nil end
+    return data
+end
+local persistedProfile = loadProfileData()
+local filePersistenceAvailable = type(readfile) == "function" and type(writefile) == "function"
+local profileSaveStatus = filePersistenceAvailable and "💾 HỒ SƠ: FILE SAVE SẴN SÀNG" or "⚠️ HỒ SƠ: KHÔNG CÓ FILE API"
+local saveStatusLabel = nil
+
+local player    = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Remove the previous UI first so its cleanup can restore the cursor before we snapshot it.
+local previousGui = playerGui:FindFirstChild("DungdxAimTrainer")
+if previousGui then previousGui:Destroy() end
+local previousMouseIconEnabled = UserInputService.MouseIconEnabled
+-- The original v8.0 did not restore the cursor when its GUI was removed.
+if previousGui and not previousMouseIconEnabled then previousMouseIconEnabled = true end
+
+local connections = {}
+local alive = true
+local function connectTracked(signal, callback)
+    local connection = signal:Connect(callback)
+    table.insert(connections, connection)
+    return connection
+end
+
+local camera = workspace.CurrentCamera
+while not camera do
+    task.wait()
+    camera = workspace.CurrentCamera
+end
+
+local CONFIG = {
+	GameTime = 30, TargetSize = 75, ComboWindow = 1.5, TargetLifetime = 3.5,
+	TrapChance = 0.05, TrapMinScore = 5,
+	BGMVolume = 0.2, SFXVolume = 0.6,
+	ScreenShake = true, ShowCrosshair = true,
+	BGMEnabled = true, SFXEnabled = true,
+}
+
+local C = {
+    -- Deep graphite / navy surfaces with restrained technical accents.
+    BgDark = Color3.fromRGB(6, 10, 18),
+    PanelTop = Color3.fromRGB(11, 19, 32), PanelBot = Color3.fromRGB(7, 13, 24),
+    CardTop = Color3.fromRGB(18, 31, 49), CardBot = Color3.fromRGB(11, 21, 36),
+    CardHover = Color3.fromRGB(28, 48, 69),
+    NeonCyan = Color3.fromRGB(66, 224, 235), NeonPink = Color3.fromRGB(235, 105, 190),
+    NeonPurple = Color3.fromRGB(157, 132, 255), NeonYellow = Color3.fromRGB(255, 198, 94),
+    NeonOrange = Color3.fromRGB(255, 143, 92),
+    TrapRed = Color3.fromRGB(239, 78, 91), TrapDark = Color3.fromRGB(111, 38, 49),
+    TextWhite = Color3.fromRGB(232, 240, 248), TextDim = Color3.fromRGB(156, 173, 192),
+    DangerRed = Color3.fromRGB(239, 86, 98), SuccessGreen = Color3.fromRGB(78, 218, 167),
+    Dim = Color3.fromRGB(67, 84, 105),
+}
+local PALETTE = {C.NeonCyan, C.NeonPink, C.NeonPurple, C.NeonYellow, C.NeonOrange}
+
+local soundGroup = Instance.new("SoundGroup")
+soundGroup.Volume = 1
+soundGroup.Parent = SoundService
+
+local function mkSound(id, vol, looped)
+	local s = Instance.new("Sound")
+	s.SoundId = "rbxassetid://" .. id
+	s.Volume = vol
+	s.Looped = looped or false
+	s.SoundGroup = soundGroup
+	s.Parent = soundGroup
+	return s
+end
+
+local SFX = {
+	BGM = mkSound("1837879082", CONFIG.BGMVolume, true),
+	Hit = mkSound("6042053623", CONFIG.SFXVolume),
+	Miss = mkSound("6042053623", CONFIG.SFXVolume * 0.7),
+	Countdown = mkSound("12221967", CONFIG.SFXVolume * 1.1),
+	End = mkSound("138082104", CONFIG.SFXVolume * 1.3),
+	Click = mkSound("6042053623", CONFIG.SFXVolume * 0.35),
+	Hover = mkSound("6042053623", CONFIG.SFXVolume * 0.15),
+	Achieve = mkSound("138082104", CONFIG.SFXVolume * 1.4),
+	Trap = mkSound("138082104", CONFIG.SFXVolume * 1.5),
+	Wrong = mkSound("6042053623", CONFIG.SFXVolume * 0.8),
+}
+SFX.Miss.PlaybackSpeed = 0.5
+SFX.Click.PlaybackSpeed = 1.6
+SFX.Hover.PlaybackSpeed = 2.0
+SFX.Trap.PlaybackSpeed = 0.6
+SFX.Wrong.PlaybackSpeed = 0.7
+
+local function playSFX(name)
+    if not alive then return end
+    if name == "BGM" then
+        if CONFIG.BGMEnabled and not SFX.BGM.IsPlaying then SFX.BGM:Play() end
+        return
+    end
+    local sound = SFX[name]
+    if CONFIG.SFXEnabled and sound then
+        sound:Play()
+    end
+end
+
+local function corner(p, r)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = typeof(r) == "number" and UDim.new(0, r) or r
+	c.Parent = p
+	return c
+end
+local function stroke(p, color, thick, trans)
+	local s = Instance.new("UIStroke")
+	s.Color = color; s.Thickness = thick or 1; s.Transparency = trans or 0
+	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	s.Parent = p
+	return s
+end
+local function textStroke(label, thickness, transparency)
+    -- Keep contrast, but avoid the heavy cartoon-style black outline used by the old UI.
+    local s = Instance.new("UIStroke")
+    s.Color = Color3.fromRGB(3, 8, 15)
+    s.Thickness = math.min(thickness or 1, 1.2)
+    s.Transparency = math.max(transparency or 0.6, 0.56)
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+    s.Parent = label
+    return s
+end
+local function mk(cls, props, parent)
+	local o = Instance.new(cls)
+	for k, v in pairs(props or {}) do o[k] = v end
+	if parent then o.Parent = parent end
+	return o
+end
+local function tween(obj, time, props, style, dir)
+	local t = TweenService:Create(obj, TweenInfo.new(time, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
+	t:Play()
+	return t
+end
+local function addButtonEffects(btn, baseColor, hoverColor, pressColor)
+	local btnScale = Instance.new("UIScale")
+	btnScale.Scale = 1
+	btnScale.Parent = btn
+	local isHovering = false
+	btn.MouseEnter:Connect(function() isHovering = true; tween(btn, 0.15, { BackgroundColor3 = hoverColor }) end)
+	btn.MouseLeave:Connect(function() isHovering = false; tween(btn, 0.15, { BackgroundColor3 = baseColor }); tween(btnScale, 0.12, { Scale = 1 }) end)
+	btn.MouseButton1Down:Connect(function() tween(btnScale, 0.08, { Scale = 0.95 }); tween(btn, 0.08, { BackgroundColor3 = pressColor }) end)
+	btn.MouseButton1Up:Connect(function() tween(btnScale, 0.15, { Scale = 1 }, Enum.EasingStyle.Back); tween(btn, 0.12, { BackgroundColor3 = isHovering and hoverColor or baseColor }) end)
+end
+
+-- SCREEN GUI
+local screenGui = mk("ScreenGui", {
+    Name = "DungdxAimTrainer", ResetOnSpawn = false,
+    IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, playerGui)
+local rgbTween = nil
+screenGui.Destroying:Connect(function()
+    if saveProfile then pcall(saveProfile) end
+    if rgbTween then pcall(function() rgbTween:Cancel() end) end
+    alive = false
+    for _, connection in ipairs(connections) do
+        if connection.Connected then connection:Disconnect() end
+    end
+    if SFX.BGM then SFX.BGM:Stop() end
+    if soundGroup and soundGroup.Parent then soundGroup:Destroy() end
+    UserInputService.MouseIconEnabled = previousMouseIconEnabled
+end)
+
+-- Keep the backdrop fixed to the viewport and size gameplay targets independently.
+-- Main-panel geometry is recalculated later from the safe viewport area.
+local targetScaleFactor = 1
+local responsiveUpdate
+local hudResponsiveUpdate
+local function updateScale()
+    local vp = camera.ViewportSize
+    if UserInputService.TouchEnabled then
+        targetScaleFactor = math.clamp(vp.X / 420, 0.85, 1.15)
+    else
+        targetScaleFactor = vp.X < 900 and 0.95 or 1
+    end
+    if responsiveUpdate then responsiveUpdate() end
+    if hudResponsiveUpdate then hudResponsiveUpdate() end
+end
+updateScale()
+connectTracked(camera:GetPropertyChangedSignal("ViewportSize"), updateScale)
+connectTracked(workspace:GetPropertyChangedSignal("CurrentCamera"), function()
+    local nextCamera = workspace.CurrentCamera
+    if not nextCamera then return end
+    camera = nextCamera
+    connectTracked(camera:GetPropertyChangedSignal("ViewportSize"), updateScale)
+    updateScale()
+end)
+
+local background = mk("Frame", {
+    Name = "SciFiBackdrop", Size = UDim2.fromScale(1, 1), BackgroundColor3 = C.BgDark,
+    -- Keep the game world visible outside the actual panel. This frame remains as a
+    -- harmless compatibility layer for existing visibility logic, but never darkens the viewport.
+    BackgroundTransparency = 1, BorderSizePixel = 0, Active = false,
+}, screenGui)
+local backdropGradient = Instance.new("UIGradient")
+backdropGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(5, 9, 17)),
+    ColorSequenceKeypoint.new(0.55, Color3.fromRGB(10, 19, 31)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(6, 12, 23)),
+})
+backdropGradient.Rotation = 28
+backdropGradient.Parent = background
+
+local crosshair = mk("ImageLabel", {
+    Size = UDim2.new(0, 36, 0, 36), AnchorPoint = Vector2.new(0.5, 0.5),
+    BackgroundTransparency = 1, Image = "rbxassetid://1063294789",
+    ImageColor3 = C.NeonCyan, ImageTransparency = 0.1, ZIndex = 200,
+    Visible = CONFIG.ShowCrosshair and not UserInputService.TouchEnabled,
+}, screenGui)
+if not UserInputService.TouchEnabled then UserInputService.MouseIconEnabled = false end
+connectTracked(RunService.RenderStepped, function()
+    if not crosshair.Visible then return end
+    local m = UserInputService:GetMouseLocation()
+    crosshair.Position = UDim2.new(0, m.X, 0, m.Y)
+end)
+
+-- TOOLBAR
+local toolbar = mk("Frame", {
+    Name = "FloatingLauncherContainer", Size = UDim2.fromOffset(52, 52),
+    Position = UDim2.new(1, -64, 0, 112), BackgroundTransparency = 1,
+    ZIndex = 100, Active = true,
+}, screenGui)
+local launcherSize = 52
+local launcherUserMoved = false
+local launcherPosition = nil
+local function clampLauncherPosition(point, viewport)
+    local maxX = math.max(8, viewport.X - launcherSize - 8)
+    local maxY = math.max(8, viewport.Y - launcherSize - 8)
+    local topInsetY = 0
+    pcall(function()
+        local topLeft = GuiService:GetGuiInset()
+        topInsetY = topLeft.Y
+    end)
+    local minY = math.min(math.max(8, topInsetY + 4), maxY)
+    return Vector2.new(math.clamp(point.X, 8, maxX), math.clamp(point.Y, minY, maxY))
+end
+local LAUNCHER_IMAGE_ID = "91434453184512"
+local function makeFloatBtn(icon, order, color, useAvatarImage)
+    local className = useAvatarImage and "ImageButton" or "TextButton"
+    local props = {
+        Size = UDim2.new(0, 42, 0, 42), Position = UDim2.new(0, 0, 0, (order - 1) * 48),
+        BackgroundColor3 = C.CardTop, AutoButtonColor = false, ZIndex = 100,
+    }
+    if useAvatarImage then
+        props.Image = "rbxassetid://" .. LAUNCHER_IMAGE_ID
+        props.ImageColor3 = Color3.new(1, 1, 1)
+        props.ImageTransparency = 0
+        props.ScaleType = Enum.ScaleType.Crop
+    else
+        props.Text = icon
+        props.TextSize = 18
+        props.Font = Enum.Font.GothamBold
+        props.TextColor3 = color
+    end
+    local btn = mk(className, props, toolbar)
+    corner(btn, UDim.new(1, 0))
+    stroke(btn, color, 1.5, 0.2)
+    addButtonEffects(btn, C.CardTop, C.CardHover, C.CardBot)
+    return btn
+end
+local floatToggle = makeFloatBtn("🎯", 1, C.NeonCyan, true)
+local floatBGM    = makeFloatBtn("🔊", 2, C.SuccessGreen)
+local floatSFX    = makeFloatBtn("🔔", 3, C.NeonYellow)
+
+-- MAIN PANEL
+local main = mk("Frame", {
+    Name = "MainPanel", Size = UDim2.fromOffset(1060, 620), Position = UDim2.fromScale(0.5, 0.5),
+    AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = C.PanelTop,
+    BorderSizePixel = 0, Visible = true, ClipsDescendants = true,
+}, screenGui)
+corner(main, 14)
+local mainStroke = stroke(main, C.NeonCyan, 2.2, 0.04)
+local rgbBorderGradient = Instance.new("UIGradient")
+rgbBorderGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 55, 105)),
+    ColorSequenceKeypoint.new(0.17, Color3.fromRGB(255, 174, 66)),
+    ColorSequenceKeypoint.new(0.34, Color3.fromRGB(220, 255, 76)),
+    ColorSequenceKeypoint.new(0.51, Color3.fromRGB(45, 255, 190)),
+    ColorSequenceKeypoint.new(0.68, Color3.fromRGB(55, 165, 255)),
+    ColorSequenceKeypoint.new(0.84, Color3.fromRGB(183, 83, 255)),
+    ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 55, 105)),
+})
+rgbBorderGradient.Rotation = 0
+rgbBorderGradient.Offset = Vector2.new(-1, 0)
+rgbBorderGradient.Parent = mainStroke
+rgbTween = TweenService:Create(rgbBorderGradient, TweenInfo.new(7, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1, false), {
+    Rotation = 360,
+    Offset = Vector2.new(1, 0),
+})
+rgbTween:Play()
+local panelGradient = Instance.new("UIGradient")
+panelGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(15, 28, 45)),
+    ColorSequenceKeypoint.new(0.52, Color3.fromRGB(10, 19, 33)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(7, 13, 25)),
+})
+panelGradient.Rotation = 90
+panelGradient.Parent = main
+
+-- User-controlled window geometry: drag the top bar; resize by dragging any corner.
+-- Corner grips are fully invisible: no icon, square, border, or visual handle.
+local panelCustomSize = nil
+local panelPosition = nil -- absolute top-left position in viewport pixels
+local panelPositionLocked = false
+local panelDragState = nil
+local panelResizeState = nil
+local resizeHandles = {}
+for _, gripInfo in ipairs({
+    { name = "ResizeCornerTopLeft",     x = 0, y = 0, sx = -1, sy = -1 },
+    { name = "ResizeCornerTopRight",    x = 1, y = 0, sx =  1, sy = -1 },
+    { name = "ResizeCornerBottomLeft",  x = 0, y = 1, sx = -1, sy =  1 },
+    { name = "ResizeCornerBottomRight", x = 1, y = 1, sx =  1, sy =  1 },
+}) do
+    local grip = mk("TextButton", {
+        Name = gripInfo.name,
+        Size = UDim2.fromOffset(34, 34),
+        AnchorPoint = Vector2.new(gripInfo.x, gripInfo.y),
+        Position = UDim2.new(gripInfo.x, gripInfo.x == 1 and 0 or 0, gripInfo.y, gripInfo.y == 1 and 0 or 0),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Text = "",
+        AutoButtonColor = false,
+        Active = true,
+        Selectable = false,
+        ZIndex = 250,
+    }, main)
+    resizeHandles[grip] = { sx = gripInfo.sx, sy = gripInfo.sy }
+end
+
+local navBar = mk("Frame", { Size = UDim2.new(1, 0, 0, 50), BackgroundColor3 = C.PanelBot, BorderSizePixel = 0, ZIndex = 2, Active = true }, main)
+corner(navBar, 14)
+local navDivider = mk("Frame", { Size = UDim2.new(1, -24, 0, 1), Position = UDim2.new(0, 12, 1, -1), BackgroundColor3 = C.NeonCyan, BackgroundTransparency = 0.76, BorderSizePixel = 0, ZIndex = 4 }, navBar)
+
+-- Audio shortcuts live inside the top bar; only the reopen launcher stays outside the panel.
+floatToggle.Name = "DraggableReopenButton"
+floatToggle.Size = UDim2.fromOffset(48, 48)
+floatToggle.Position = UDim2.fromOffset(2, 2)
+floatToggle.BackgroundColor3 = Color3.fromRGB(9, 23, 38)
+floatToggle.Image = "rbxassetid://" .. LAUNCHER_IMAGE_ID
+floatToggle.ImageColor3 = Color3.new(1, 1, 1)
+floatToggle.ImageTransparency = 0
+floatToggle.ScaleType = Enum.ScaleType.Crop
+floatToggle.Active = true
+floatToggle.Selectable = true
+floatToggle.Visible = false
+-- The user's avatar image is the button face; the cyan circular stroke provides contrast.
+-- Avoid a gradient over the image so the avatar remains bright and recognizable.
+local launcherStroke = floatToggle:FindFirstChildOfClass("UIStroke")
+if launcherStroke then
+    launcherStroke.Color = C.NeonCyan
+    launcherStroke.Thickness = 2
+    launcherStroke.Transparency = 0.08
+end
+floatBGM.Parent = navBar
+floatSFX.Parent = navBar
+floatBGM.Text = "🎵"
+floatSFX.Text = "🔊"
+floatBGM.TextSize = 14
+floatSFX.TextSize = 14
+floatBGM.TextColor3 = CONFIG.BGMEnabled and C.NeonCyan or C.Dim
+floatSFX.TextColor3 = CONFIG.SFXEnabled and C.NeonCyan or C.Dim
+floatBGM.ZIndex = 5
+floatSFX.ZIndex = 5
+local bgmStroke = floatBGM:FindFirstChildOfClass("UIStroke")
+local sfxStroke = floatSFX:FindFirstChildOfClass("UIStroke")
+if bgmStroke then bgmStroke.Color = C.NeonCyan end
+if sfxStroke then sfxStroke.Color = C.NeonCyan end
+local minimizeBtn = mk("TextButton", {
+    Size = UDim2.fromOffset(26, 28), Position = UDim2.new(1, -116, 0.5, -14),
+    BackgroundColor3 = C.CardTop, Text = "—", TextColor3 = C.TextDim,
+    Font = Enum.Font.GothamBold, TextSize = 14, AutoButtonColor = false, ZIndex = 5,
+}, navBar)
+corner(minimizeBtn, 7)
+stroke(minimizeBtn, C.Dim, 1, 0.45)
+addButtonEffects(minimizeBtn, C.CardTop, C.CardHover, C.PanelBot)
+
+local logoFrame = mk("Frame", { BackgroundTransparency = 1, Position = UDim2.new(0, 14, 0, 0), Size = UDim2.new(0, 150, 1, 0), ZIndex = 3 }, navBar)
+mk("TextLabel", {
+    BackgroundTransparency = 1, Size = UDim2.fromOffset(22, 50), Font = Enum.Font.GothamBold,
+    Text = "◎", TextColor3 = C.NeonCyan, TextSize = 21, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 3,
+}, logoFrame)
+local logoText = mk("TextLabel", {
+    BackgroundTransparency = 1, Position = UDim2.fromOffset(24, 4), Size = UDim2.new(1, -24, 0, 23),
+    Font = Enum.Font.GothamBold, Text = "Dungdx", TextColor3 = C.TextWhite, TextSize = 17,
+    TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 3,
+}, logoFrame)
+local logoSub = mk("TextLabel", {
+    BackgroundTransparency = 1, Position = UDim2.fromOffset(25, 25), Size = UDim2.new(1, -25, 0, 13),
+    Font = Enum.Font.Gotham, Text = "PRECISION  /  REACTION LAB", TextColor3 = C.TextDim, TextSize = 7,
+    TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 3,
+}, logoFrame)
+-- Transparent hit area: the logo section is an easy drag handle without blocking tabs.
+local dragGrip = mk("TextButton", {
+    Name = "PanelDragGrip", Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(150, 50),
+    BackgroundTransparency = 1, Text = "", AutoButtonColor = false, Active = true, Selectable = false, ZIndex = 8,
+}, navBar)
+
+local navBtns = mk("Frame", { Size = UDim2.new(1, -200, 1, 0), Position = UDim2.new(0, 190, 0, 0), BackgroundTransparency = 1, ZIndex = 3 }, navBar)
+local navBtnList = {}
+local activePageName = nil
+local function makeNavButton(text, order, color, pageKey)
+	local b = mk("TextButton", {
+        Size = UDim2.new(0.24, -4, 0, 30), Position = UDim2.new((order - 1) * 0.25, 0, 0.5, -15),
+		BackgroundColor3 = C.CardTop, Text = text, TextColor3 = color,
+		Font = Enum.Font.GothamMedium, TextSize = 10, AutoButtonColor = false, ZIndex = 3,
+	}, navBtns)
+	corner(b, 8)
+	local navStroke = stroke(b, color, 1, 0.56)
+	local indicator = mk("Frame", { Size = UDim2.new(0.7, 0, 0, 2), Position = UDim2.new(0.15, 0, 1, -2), BackgroundColor3 = color, BorderSizePixel = 0, BackgroundTransparency = 1, ZIndex = 5 }, b)
+	corner(indicator, UDim.new(1, 0))
+	addButtonEffects(b, C.CardTop, C.CardHover, C.CardBot)
+    b.MouseLeave:Connect(function()
+        if activePageName == pageKey then
+            tween(b, 0.12, { BackgroundColor3 = color })
+        end
+    end)
+	navBtnList[pageKey] = { btn = b, indicator = indicator, color = color, stroke = navStroke }
+	return b
+end
+
+local btnPlay     = makeNavButton("🎮 CHƠI", 1, C.NeonCyan, "Play")
+local btnStats    = makeNavButton("📊 THỐNG KÊ", 2, C.NeonPink, "Stats")
+local btnAchieve  = makeNavButton("🏆 THÀNH TỰU", 3, C.NeonYellow, "Achievements")
+local btnSettings = makeNavButton("⚙️ CÀI ĐẶT", 4, C.NeonPurple, "Settings")
+
+responsiveUpdate = function()
+    if not main or not main.Parent then return end
+    local vp = camera.ViewportSize
+    local topInset, bottomInset = Vector2.zero, Vector2.zero
+    pcall(function()
+        topInset, bottomInset = GuiService:GetGuiInset()
+    end)
+
+    local safeWidth = math.max(1, vp.X - math.max(0, topInset.X) - math.max(0, bottomInset.X))
+    -- Reserve space for Roblox's top controls as well as the physical safe area.
+    local safeTop = math.min(vp.Y * 0.16, math.max(topInset.Y + 56, 56))
+    local safeBottom = vp.Y - math.max(0, bottomInset.Y) - 12
+    if safeBottom < safeTop + 160 then
+        safeTop = math.max(8, vp.Y * 0.10)
+        safeBottom = math.min(vp.Y - 2, math.max(safeTop + 160, vp.Y - 8))
+        safeTop = math.min(safeTop, math.max(6, safeBottom - 160))
+    end
+    local usableHeight = math.max(1, safeBottom - safeTop)
+    local maxPanelWidth = math.max(220, math.min(1160, safeWidth - 12))
+    local minPanelWidth = math.min(300, maxPanelWidth)
+    local maxPanelHeight = math.max(1, math.min(720, usableHeight - 4))
+    local minPanelHeight = math.min(220, maxPanelHeight)
+    local panelWidth
+    local panelHeight
+    if panelCustomSize then
+        panelWidth = math.clamp(panelCustomSize.X, minPanelWidth, maxPanelWidth)
+        panelHeight = math.clamp(panelCustomSize.Y, minPanelHeight, maxPanelHeight)
+        panelCustomSize = Vector2.new(panelWidth, panelHeight)
+    else
+        panelWidth = math.min(1160, math.max(1, safeWidth - math.min(24, safeWidth * 0.08)))
+        panelHeight = math.min(usableHeight, math.max(math.min(200, usableHeight), math.min(720, usableHeight - 8)))
+    end
+
+    main.Size = UDim2.fromOffset(panelWidth, panelHeight)
+    local defaultTopLeft = Vector2.new((vp.X - panelWidth) * 0.5, safeTop + (usableHeight - panelHeight) * 0.5)
+    local topLeft = defaultTopLeft
+    if panelPositionLocked and panelPosition then
+        local minX = 4
+        local maxX = math.max(minX, vp.X - panelWidth - 4)
+        local minY = math.min(math.max(4, topInset.Y + 4), math.max(4, vp.Y - panelHeight - 4))
+        local maxY = math.max(minY, vp.Y - math.max(0, bottomInset.Y) - panelHeight - 4)
+        topLeft = Vector2.new(math.clamp(panelPosition.X, minX, maxX), math.clamp(panelPosition.Y, minY, maxY))
+        panelPosition = topLeft
+    end
+    main.Position = UDim2.fromOffset(topLeft.X + panelWidth * 0.5, topLeft.Y + panelHeight * 0.5)
+
+    local showBrand = panelWidth >= 760
+    local showCompactBrand = panelWidth >= 330 and not showBrand
+    local showAudio = panelWidth >= 430
+    local navStart = showBrand and 164 or (showCompactBrand and 88 or 8)
+    local navReserved = showAudio and 124 or 16
+    logoFrame.Visible = showBrand or showCompactBrand
+    if showBrand then
+        dragGrip.Position = UDim2.fromOffset(0, 0)
+        dragGrip.Size = UDim2.fromOffset(156, 50)
+    elseif showCompactBrand then
+        dragGrip.Position = UDim2.fromOffset(0, 0)
+        dragGrip.Size = UDim2.fromOffset(86, 50)
+    else
+        -- On very narrow screens keep a slim, non-intrusive drag strip above the tabs.
+        dragGrip.Position = UDim2.fromOffset(0, 0)
+        dragGrip.Size = UDim2.new(1, 0, 0, 7)
+    end
+    minimizeBtn.Visible = showAudio
+    floatBGM.Visible = showAudio
+    floatSFX.Visible = showAudio
+
+    if showBrand then
+        logoFrame.Position = UDim2.new(0, 14, 0, 0)
+        logoFrame.Size = UDim2.new(0, 150, 1, 0)
+        logoText.Position = UDim2.fromOffset(24, 4)
+        logoText.Size = UDim2.new(1, -24, 0, 23)
+        logoText.TextSize = 17
+        logoText.TextYAlignment = Enum.TextYAlignment.Center
+        logoSub.Visible = true
+    elseif showCompactBrand then
+        logoFrame.Position = UDim2.new(0, 8, 0, 0)
+        logoFrame.Size = UDim2.new(0, 78, 1, 0)
+        logoText.Position = UDim2.fromOffset(19, 0)
+        logoText.Size = UDim2.new(0, 58, 1, 0)
+        logoText.TextSize = 11
+        logoText.TextYAlignment = Enum.TextYAlignment.Center
+        logoSub.Visible = false
+    end
+
+    navBtns.Position = UDim2.new(0, navStart, 0, 0)
+    navBtns.Size = UDim2.new(1, -(navStart + navReserved), 1, 0)
+    local approximateTabWidth = (panelWidth - navStart - navReserved) / 4
+    local tabTextSize = approximateTabWidth < 58 and 10 or (approximateTabWidth < 94 and 8 or 10)
+    local navLabels = approximateTabWidth < 58 and {
+        Play = "🎮", Stats = "📊", Achievements = "🏆", Settings = "⚙️",
+    } or (approximateTabWidth < 94 and {
+        Play = "🎮 CHƠI", Stats = "📊 SỐ", Achievements = "🏆 ĐẠT", Settings = "⚙️ SET",
+    } or {
+        Play = "🎮 CHƠI", Stats = "📊 THỐNG KÊ", Achievements = "🏆 THÀNH TỰU", Settings = "⚙️ CÀI ĐẶT",
+    })
+    for key, data in pairs(navBtnList) do
+        data.btn.TextSize = tabTextSize
+        data.btn.Text = navLabels[key] or key
+    end
+
+    if showAudio then
+        minimizeBtn.Position = UDim2.new(1, -120, 0.5, -14)
+        floatBGM.Size = UDim2.fromOffset(32, 30)
+        floatBGM.Position = UDim2.new(1, -88, 0.5, -15)
+        floatSFX.Size = UDim2.fromOffset(32, 30)
+        floatSFX.Position = UDim2.new(1, -48, 0.5, -15)
+    end
+
+    toolbar.Size = UDim2.fromOffset(launcherSize, launcherSize)
+    floatToggle.Size = UDim2.fromOffset(48, 48)
+    floatToggle.Position = UDim2.fromOffset(2, 2)
+    floatToggle.Image = "rbxassetid://" .. LAUNCHER_IMAGE_ID
+    floatToggle.ImageTransparency = 0
+    floatToggle.ImageColor3 = Color3.new(1, 1, 1)
+    if launcherUserMoved and launcherPosition then
+        launcherPosition = clampLauncherPosition(launcherPosition, vp)
+    else
+        launcherPosition = clampLauncherPosition(Vector2.new(vp.X - launcherSize - 12, safeTop + 8), vp)
+    end
+    toolbar.Position = UDim2.fromOffset(launcherPosition.X, launcherPosition.Y)
+
+    if hudResponsiveUpdate then hudResponsiveUpdate() end
+end
+responsiveUpdate()
+connectTracked(main:GetPropertyChangedSignal("AbsoluteSize"), function()
+    if main.Parent then responsiveUpdate() end
+end)
+
+local function pointerIn(guiObject, point)
+    if not guiObject or not guiObject.Parent or not guiObject.Visible then return false end
+    local pos, size = guiObject.AbsolutePosition, guiObject.AbsoluteSize
+    return point.X >= pos.X and point.X <= pos.X + size.X and point.Y >= pos.Y and point.Y <= pos.Y + size.Y
+end
+
+local function beginPanelDrag(input)
+    if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
+    if not main.Visible then return end
+    local point = Vector2.new(input.Position.X, input.Position.Y)
+    -- On narrow layouts the 7px strip remains draggable even above the tab container.
+    local onSlimTopGrip = dragGrip.AbsoluteSize.Y <= 8 and point.Y <= dragGrip.AbsolutePosition.Y + dragGrip.AbsoluteSize.Y
+    -- Do not turn navigation/audio clicks into drags.
+    if (pointerIn(navBtns, point) and not onSlimTopGrip) or pointerIn(minimizeBtn, point) or pointerIn(floatBGM, point) or pointerIn(floatSFX, point) then return end
+    panelPosition = Vector2.new(main.AbsolutePosition.X, main.AbsolutePosition.Y)
+    panelPositionLocked = true
+    panelDragState = {
+        input = input,
+        inputType = input.UserInputType,
+        pointer = point,
+        origin = panelPosition,
+    }
+end
+
+navBar.InputBegan:Connect(beginPanelDrag)
+logoFrame.InputBegan:Connect(beginPanelDrag)
+dragGrip.InputBegan:Connect(beginPanelDrag)
+
+for grip, directions in pairs(resizeHandles) do
+    grip.InputBegan:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        if not main.Visible then return end
+        panelPosition = Vector2.new(main.AbsolutePosition.X, main.AbsolutePosition.Y)
+        panelPositionLocked = true
+        panelResizeState = {
+            input = input,
+            inputType = input.UserInputType,
+            pointer = Vector2.new(input.Position.X, input.Position.Y),
+            size = Vector2.new(main.AbsoluteSize.X, main.AbsoluteSize.Y),
+            origin = panelPosition,
+            sx = directions.sx,
+            sy = directions.sy,
+        }
+    end)
+end
+
+connectTracked(UserInputService.InputChanged, function(input)
+    if panelDragState then
+        local isMouseMove = panelDragState.inputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseMovement
+        local isTouchMove = panelDragState.inputType == Enum.UserInputType.Touch and input.UserInputType == Enum.UserInputType.Touch
+        if isMouseMove or isTouchMove then
+            local pointer = Vector2.new(input.Position.X, input.Position.Y)
+            local delta = pointer - panelDragState.pointer
+            panelPosition = Vector2.new(panelDragState.origin.X + delta.X, panelDragState.origin.Y + delta.Y)
+            panelPositionLocked = true
+            responsiveUpdate()
+        end
+    elseif panelResizeState then
+        local isMouseMove = panelResizeState.inputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseMovement
+        local isTouchMove = panelResizeState.inputType == Enum.UserInputType.Touch and input.UserInputType == Enum.UserInputType.Touch
+        if isMouseMove or isTouchMove then
+            local pointer = Vector2.new(input.Position.X, input.Position.Y)
+            local delta = pointer - panelResizeState.pointer
+            local startSize = panelResizeState.size
+            local origin = panelResizeState.origin
+            local sx, sy = panelResizeState.sx, panelResizeState.sy
+
+            -- First apply and clamp the new size. Then offset the top-left for left/top
+            -- grips so the opposite corner stays anchored while resizing.
+            panelPosition = origin
+            panelPositionLocked = true
+            panelCustomSize = Vector2.new(startSize.X + delta.X * sx, startSize.Y + delta.Y * sy)
+            responsiveUpdate()
+
+            local actualSize = panelCustomSize or startSize
+            panelPosition = Vector2.new(
+                origin.X + (sx < 0 and (startSize.X - actualSize.X) or 0),
+                origin.Y + (sy < 0 and (startSize.Y - actualSize.Y) or 0)
+            )
+            responsiveUpdate()
+        end
+    end
+end)
+
+connectTracked(UserInputService.InputEnded, function(input)
+    if panelDragState then
+        local released = input.UserInputType == Enum.UserInputType.MouseButton1
+            or input == panelDragState.input
+            or (panelDragState.inputType == Enum.UserInputType.Touch and input.UserInputType == Enum.UserInputType.Touch)
+        if released then panelDragState = nil end
+    end
+    if panelResizeState then
+        local released = input.UserInputType == Enum.UserInputType.MouseButton1
+            or input == panelResizeState.input
+            or (panelResizeState.inputType == Enum.UserInputType.Touch and input.UserInputType == Enum.UserInputType.Touch)
+        if released then panelResizeState = nil end
+    end
+end)
+
+local pages = {}
+local function newPage(name)
+    local isScrollablePage = name == "Play" or name == "Stats"
+    local className = isScrollablePage and "ScrollingFrame" or "Frame"
+    local props = {
+        Name = name, Size = UDim2.new(1, -20, 1, -66),
+        Position = UDim2.new(0, 10, 0, 58), BackgroundTransparency = 1,
+        Visible = false, ClipsDescendants = true, ZIndex = 3,
+    }
+    if isScrollablePage then
+        props.CanvasSize = UDim2.new(0, 0, 0, 560)
+        props.ScrollingDirection = Enum.ScrollingDirection.Y
+        props.ScrollBarThickness = 3
+        props.ScrollBarImageColor3 = C.NeonCyan
+        props.ScrollBarImageTransparency = 0.35
+        props.BorderSizePixel = 0
+        props.BackgroundColor3 = C.PanelTop
+    end
+    local f = mk(className, props, main)
+    pages[name] = f
+    return f
+end
+local function showPage(name)
+    activePageName = name
+	for n, p in pairs(pages) do p.Visible = (n == name) end
+	for key, data in pairs(navBtnList) do
+		if key == name then
+			data.btn.TextColor3 = C.TextWhite
+			tween(data.btn, 0.2, { BackgroundColor3 = data.color })
+			tween(data.indicator, 0.3, { BackgroundTransparency = 0 })
+		else
+			data.btn.TextColor3 = C.TextDim
+			tween(data.btn, 0.2, { BackgroundColor3 = C.CardTop })
+			tween(data.indicator, 0.3, { BackgroundTransparency = 1 })
+		end
+	end
+end
+
+local pagePlay = newPage("Play")
+local pageStats = newPage("Stats")
+local pageAchieve = newPage("Achievements")
+local pageSettings = newPage("Settings")
+
+btnPlay.MouseButton1Click:Connect(function() playSFX("Click"); showPage("Play") end)
+btnStats.MouseButton1Click:Connect(function() playSFX("Click"); showPage("Stats") end)
+btnAchieve.MouseButton1Click:Connect(function() playSFX("Click"); showPage("Achievements") end)
+btnSettings.MouseButton1Click:Connect(function() playSFX("Click"); showPage("Settings") end)
+
+-- PLAY PAGE · adaptive cards, typographic icons, no fixed-height overflow.
+local titlePlay = mk("TextLabel", {
+    BackgroundTransparency = 1, Size = UDim2.new(1, -20, 0, 24), Position = UDim2.fromOffset(10, 3),
+    Font = Enum.Font.GothamBold, Text = "🎯 CHỌN BÀI LUYỆN TẬP", TextColor3 = C.TextWhite,
+    TextSize = 17, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 4,
+}, pagePlay)
+local warnLbl = mk("TextLabel", {
+    BackgroundTransparency = 1, Size = UDim2.new(1, -20, 0, 17), Position = UDim2.fromOffset(10, 28),
+    Font = Enum.Font.Gotham, Text = "⚠️ TRÁNH BẪY  •  BẮN SAI = KẾT THÚC VÁN",
+    TextColor3 = C.TextDim, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 4,
+}, pagePlay)
+
+local modeInfo = {
+    { id = "Gridshot", name = "GRIDSHOT", icon = "🎯", desc = "Luyện độ chính xác với 3 mục tiêu ngẫu nhiên.", color = C.NeonCyan },
+    { id = "Flick", name = "FLICK", icon = "⚡", desc = "Phản xạ nhanh với một mục tiêu xuất hiện liên tục.", color = C.NeonPink },
+    { id = "Tracking", name = "TRACKING", icon = "🌀", desc = "Theo dõi mục tiêu chuyển động và giữ tâm ngắm.", color = C.NeonPurple },
+    { id = "Numbers", name = "NUMBER LAB", icon = "🔢", desc = "Tìm và chọn chính xác con số được yêu cầu.", color = C.NeonYellow },
+}
+
+local modeCards = {}
+local modeCardUI = {}
+local function makeModeCard(info)
+    local card = mk("TextButton", {
+        Size = UDim2.fromOffset(300, 140), Position = UDim2.fromOffset(0, 0),
+        BackgroundColor3 = C.CardTop, Text = "", AutoButtonColor = false,
+        ClipsDescendants = true, ZIndex = 4,
+    }, pagePlay)
+    corner(card, 10)
+    local cardStroke = stroke(card, info.color, 1.25, 0.38)
+    local cardGradient = Instance.new("UIGradient")
+    cardGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(22, 38, 58)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(12, 22, 37)),
+    })
+    cardGradient.Rotation = 90
+    cardGradient.Parent = card
+    local accent = mk("Frame", {
+        Size = UDim2.new(0, 3, 1, -24), Position = UDim2.fromOffset(0, 12),
+        BackgroundColor3 = info.color, BorderSizePixel = 0, ZIndex = 5,
+    }, card)
+    corner(accent, UDim.new(1, 0))
+    local iconLabel = mk("TextLabel", {
+        BackgroundTransparency = 1, Size = UDim2.fromOffset(48, 48), Position = UDim2.new(1, -60, 0, 10),
+        Font = Enum.Font.GothamMedium, Text = info.icon, TextColor3 = info.color,
+        TextTransparency = 0.42, TextSize = 34, TextXAlignment = Enum.TextXAlignment.Center,
+        ZIndex = 5,
+    }, card)
+    local nm = mk("TextLabel", {
+        BackgroundTransparency = 1, Size = UDim2.new(1, -84, 0, 22), Position = UDim2.fromOffset(14, 12),
+        Font = Enum.Font.GothamBold, Text = info.name, TextColor3 = info.color,
+        TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 5,
+    }, card)
+    local desc = mk("TextLabel", {
+        BackgroundTransparency = 1, Size = UDim2.new(1, -28, 0, 38), Position = UDim2.fromOffset(14, 40),
+        Font = Enum.Font.Gotham, Text = info.desc, TextColor3 = C.TextDim,
+        TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top, ZIndex = 5,
+    }, card)
+    local start = mk("TextLabel", {
+        BackgroundTransparency = 1, Size = UDim2.new(1, -28, 0, 18), Position = UDim2.new(0, 14, 1, -25),
+        Font = Enum.Font.GothamMedium, Text = "▶  BẮT ĐẦU", TextColor3 = C.NeonCyan,
+        TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 5,
+    }, card)
+    card.MouseEnter:Connect(function()
+        tween(card, 0.15, { BackgroundColor3 = C.CardHover })
+        tween(cardStroke, 0.15, { Transparency = 0.15 })
+    end)
+    card.MouseLeave:Connect(function()
+        tween(card, 0.15, { BackgroundColor3 = C.CardTop })
+        tween(cardStroke, 0.15, { Transparency = 0.48 })
+    end)
+    local cardScale = Instance.new("UIScale")
+    cardScale.Scale = 1
+    cardScale.Parent = card
+    card.MouseButton1Down:Connect(function() tween(cardScale, 0.08, { Scale = 0.985 }) end)
+    card.MouseButton1Up:Connect(function() tween(cardScale, 0.12, { Scale = 1 }) end)
+    modeCards[info.id] = card
+    modeCardUI[info.id] = { icon = iconLabel, title = nm, desc = desc, start = start }
+end
+for _, info in ipairs(modeInfo) do makeModeCard(info) end
+
+local function layoutPlayPage()
+    if not pagePlay or not pagePlay.Parent then return end
+    local size = pagePlay.AbsoluteSize
+    local width, height = size.X, size.Y
+    if width < 1 or height < 1 then return end
+    local compact = width < 560
+    local pad = width < 360 and 8 or 12
+    local gap = 10
+    local cardHeight
+    local cardWidth
+    local contentBottom
+    local cardsTop = 54
+    if compact then
+        cardWidth = math.max(180, width - pad * 2 - 8)
+        cardHeight = math.clamp(math.floor((height - cardsTop - 18) / 4 - 7), 88, 112)
+        for index, info in ipairs(modeInfo) do
+            local card = modeCards[info.id]
+            card.Position = UDim2.fromOffset(pad, cardsTop + (index - 1) * (cardHeight + gap))
+            card.Size = UDim2.fromOffset(cardWidth, cardHeight)
+            modeCardUI[info.id].icon.TextSize = 26
+            modeCardUI[info.id].icon.Size = UDim2.fromOffset(38, 38)
+            modeCardUI[info.id].icon.Position = UDim2.new(1, -48, 0, 7)
+            modeCardUI[info.id].title.TextSize = 13
+            modeCardUI[info.id].desc.TextSize = 9
+            modeCardUI[info.id].desc.Size = UDim2.new(1, -26, 0, 30)
+            modeCardUI[info.id].desc.Position = UDim2.fromOffset(14, 35)
+            modeCardUI[info.id].start.TextSize = 8
+            modeCardUI[info.id].start.Position = UDim2.new(0, 14, 1, -21)
+        end
+        contentBottom = cardsTop + #modeInfo * cardHeight + (#modeInfo - 1) * gap + 10
+    else
+        local innerWidth = math.max(320, width - pad * 2)
+        cardWidth = math.floor((innerWidth - gap) / 2)
+        cardHeight = math.clamp(math.floor((height - cardsTop - 24) / 2 - 8), 112, 158)
+        for index, info in ipairs(modeInfo) do
+            local col = (index - 1) % 2
+            local row = math.floor((index - 1) / 2)
+            local card = modeCards[info.id]
+            card.Position = UDim2.fromOffset(pad + col * (cardWidth + gap), cardsTop + row * (cardHeight + gap))
+            card.Size = UDim2.fromOffset(cardWidth, cardHeight)
+            modeCardUI[info.id].icon.TextSize = 34
+            modeCardUI[info.id].icon.Size = UDim2.fromOffset(48, 48)
+            modeCardUI[info.id].icon.Position = UDim2.new(1, -60, 0, 10)
+            modeCardUI[info.id].title.TextSize = 15
+            modeCardUI[info.id].desc.TextSize = 10
+            modeCardUI[info.id].desc.Size = UDim2.new(1, -28, 0, 38)
+            modeCardUI[info.id].desc.Position = UDim2.fromOffset(14, 40)
+            modeCardUI[info.id].start.TextSize = 9
+            modeCardUI[info.id].start.Position = UDim2.new(0, 14, 1, -25)
+        end
+        contentBottom = cardsTop + 2 * cardHeight + gap + 10
+    end
+    pagePlay.CanvasSize = UDim2.new(0, 0, 0, math.max(height, contentBottom))
+end
+connectTracked(pagePlay:GetPropertyChangedSignal("AbsoluteSize"), layoutPlayPage)
+task.defer(layoutPlayPage)
+
+-- STATS PAGE
+local tStats = mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 24), Font = Enum.Font.GothamBlack, Text = "📊 THỐNG KÊ PHIÊN", TextColor3 = C.TextWhite, TextSize = 18, ZIndex = 4 }, pageStats)
+textStroke(tStats, 1.5, 0.4)
+local statsGrid = mk("Frame", { Size = UDim2.new(1, -8, 0, 80), Position = UDim2.new(0, 4, 0, 30), BackgroundTransparency = 1, ZIndex = 4 }, pageStats)
+local function statBox(title, color, order)
+	local b = mk("Frame", { Size = UDim2.new(0.24, 0, 1, 0), Position = UDim2.new((order - 1) * 0.253, 0, 0, 0), BackgroundColor3 = C.CardTop, BorderSizePixel = 0, ZIndex = 4 }, statsGrid)
+	corner(b, 10)
+	stroke(b, color, 1.5, 0.4)
+	mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 14), Position = UDim2.new(0, 0, 0, 8), Font = Enum.Font.GothamBold, Text = title, TextColor3 = C.TextDim, TextSize = 9, ZIndex = 5 }, b)
+	local v = mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 26), Position = UDim2.new(0, 0, 0, 28), Font = Enum.Font.GothamBlack, Text = "0", TextColor3 = color, TextSize = 18, ZIndex = 5 }, b)
+	textStroke(v, 1.5, 0.4)
+	return v
+end
+local sessGamesVal = statBox("🎮 VÁN", C.TextWhite, 1)
+local sessBestVal = statBox("🏆 KỶ LỤC", C.NeonCyan, 2)
+local sessAvgAccVal = statBox("🎯 CHÍNH XÁC", C.SuccessGreen, 3)
+local sessAvgRTVal = statBox("⚡ RT TB", C.NeonPink, 4)
+
+local lbTitle = mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 20), Position = UDim2.new(0, 4, 0, 118), Font = Enum.Font.GothamBlack, Text = "🥇 TOP 10  /  PHIÊN HIỆN TẠI", TextColor3 = C.NeonYellow, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 4 }, pageStats)
+textStroke(lbTitle, 1.5, 0.4)
+local lbContainer = mk("ScrollingFrame", {
+	Size = UDim2.new(1, -8, 0, 190), Position = UDim2.new(0, 4, 0, 142),
+	BackgroundColor3 = C.CardBot, BorderSizePixel = 0, ScrollBarThickness = 3,
+	ScrollBarImageColor3 = C.NeonYellow, CanvasSize = UDim2.new(0, 0, 0, 0),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 4,
+}, pageStats)
+corner(lbContainer, 10)
+stroke(lbContainer, C.NeonYellow, 1, 0.5)
+mk("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, lbContainer)
+mk("UIPadding", { PaddingTop = UDim.new(0, 5), PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5) }, lbContainer)
+pageStats.CanvasSize = UDim2.new(0, 0, 0, 340)
+
+-- ACHIEVEMENTS
+local tAch = mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 24), Font = Enum.Font.GothamBlack, Text = "🏆 THÀNH TỰU", TextColor3 = C.NeonYellow, TextSize = 18, ZIndex = 4 }, pageAchieve)
+textStroke(tAch, 1.5, 0.4)
+local achieveScroll = mk("ScrollingFrame", {
+	Size = UDim2.new(1, -8, 1, -32), Position = UDim2.new(0, 4, 0, 28),
+	BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+	CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 4,
+}, pageAchieve)
+mk("UIListLayout", { Padding = UDim.new(0, 4) }, achieveScroll)
+mk("UIPadding", { PaddingRight = UDim.new(0, 8) }, achieveScroll)
+
+local ACHIEVEMENTS = {
+    { id = "first_game", name = "Khởi Đầu", desc = "Hoàn thành ván đầu tiên", icon = "🚀", metric = "games", target = 1, tier = 1 },
+    { id = "games_10", name = "Tân Binh Chăm Chỉ", desc = "Hoàn thành 10 ván", icon = "📅", metric = "games", target = 10, tier = 1 },
+    { id = "score_50", name = "Tay Nhanh I", desc = "Kỷ lục đạt 50 điểm", icon = "⚡", metric = "score", target = 50, tier = 1 },
+    { id = "combo_10", name = "Combo I", desc = "Đạt combo x10", icon = "🔥", metric = "combo", target = 10, tier = 1 },
+    { id = "acc_90", name = "Chuẩn Xác I", desc = "Độ chính xác 90% qua ≥10 lượt", icon = "✅", metric = "accuracy", target = 90, minAttempts = 10, tier = 1 },
+    { id = "rt_fast", name = "Phản Xạ I", desc = "RT TB ≤300ms qua ≥5 lần bắn", icon = "⏱️", metric = "reaction", target = 300, minSamples = 5, tier = 1 },
+
+    { id = "score_100", name = "Tay Nhanh II", desc = "Kỷ lục đạt 100 điểm", icon = "🎯", metric = "score", target = 100, tier = 2 },
+    { id = "combo_20", name = "Combo II", desc = "Đạt combo x20", icon = "🔥", metric = "combo", target = 20, tier = 2 },
+    { id = "trap_avoid", name = "Người Sống Sót I", desc = "Hoàn thành 5 ván không dính bẫy", icon = "🛡️", metric = "clean", target = 5, tier = 2 },
+    { id = "games_25", name = "Luyện Tập Bền Bỉ", desc = "Hoàn thành 25 ván", icon = "📆", metric = "games", target = 25, tier = 2 },
+    { id = "acc_95", name = "Chuẩn Xác II", desc = "Độ chính xác 95% qua ≥25 lượt", icon = "🎯", metric = "accuracy", target = 95, minAttempts = 25, tier = 2 },
+    { id = "rt_250", name = "Phản Xạ II", desc = "RT TB ≤250ms qua ≥10 lần bắn", icon = "⚡", metric = "reaction", target = 250, minSamples = 10, tier = 2 },
+
+    { id = "score_200", name = "Siêu Xạ Thủ I", desc = "Kỷ lục đạt 200 điểm", icon = "🏆", metric = "score", target = 200, tier = 3 },
+    { id = "combo_35", name = "Combo III", desc = "Đạt combo x35", icon = "💥", metric = "combo", target = 35, tier = 3 },
+    { id = "trap_avoid_15", name = "Người Sống Sót II", desc = "Hoàn thành 15 ván sạch bẫy", icon = "🛡️", metric = "clean", target = 15, tier = 3 },
+    { id = "games_50", name = "Bán Chuyên", desc = "Hoàn thành 50 ván", icon = "🎖️", metric = "games", target = 50, tier = 3 },
+    { id = "score_350", name = "Siêu Xạ Thủ II", desc = "Kỷ lục đạt 350 điểm", icon = "🏅", metric = "score", target = 350, tier = 3 },
+    { id = "rt_200", name = "Phản Xạ III", desc = "RT TB ≤200ms qua ≥25 lần bắn", icon = "⚡", metric = "reaction", target = 200, minSamples = 25, tier = 3 },
+
+    { id = "acc_98", name = "Chuẩn Xác III", desc = "Độ chính xác 98% qua ≥50 lượt", icon = "💎", metric = "accuracy", target = 98, minAttempts = 50, tier = 4 },
+    { id = "combo_50", name = "Combo IV", desc = "Đạt combo x50", icon = "💎", metric = "combo", target = 50, tier = 4 },
+    { id = "score_500", name = "Bậc Thầy I", desc = "Kỷ lục đạt 500 điểm", icon = "👑", metric = "score", target = 500, tier = 4 },
+    { id = "trap_avoid_30", name = "Người Sống Sót III", desc = "Hoàn thành 30 ván sạch bẫy", icon = "🛡️", metric = "clean", target = 30, tier = 4 },
+    { id = "games_100", name = "Cứng Cựa", desc = "Hoàn thành 100 ván", icon = "🏆", metric = "games", target = 100, tier = 4 },
+    { id = "rt_175", name = "Phản Xạ IV", desc = "RT TB ≤175ms qua ≥50 lần bắn", icon = "⚡", metric = "reaction", target = 175, minSamples = 50, tier = 4 },
+
+    { id = "score_750", name = "Bậc Thầy II", desc = "Kỷ lục đạt 750 điểm", icon = "👑", metric = "score", target = 750, tier = 5 },
+    { id = "combo_75", name = "Combo V", desc = "Đạt combo x75", icon = "🌠", metric = "combo", target = 75, tier = 5 },
+    { id = "rt_150", name = "Phản Xạ V", desc = "RT TB ≤150ms qua ≥100 lần bắn", icon = "⚡", metric = "reaction", target = 150, minSamples = 100, tier = 5 },
+    { id = "score_1000", name = "Huyền Thoại I", desc = "Kỷ lục đạt 1.000 điểm", icon = "🌌", metric = "score", target = 1000, tier = 5 },
+    { id = "games_250", name = "Chiến Binh Bền Bỉ", desc = "Hoàn thành 250 ván", icon = "🎖️", metric = "games", target = 250, tier = 5 },
+    { id = "combo_100", name = "Combo VI", desc = "Đạt combo x100", icon = "💫", metric = "combo", target = 100, tier = 5 },
+
+    { id = "score_1500", name = "Huyền Thoại II", desc = "Kỷ lục đạt 1.500 điểm", icon = "🌌", metric = "score", target = 1500, tier = 6 },
+    { id = "rt_130", name = "Phản Xạ VI", desc = "RT TB ≤130ms qua ≥150 lần bắn", icon = "⚡", metric = "reaction", target = 130, minSamples = 150, tier = 6 },
+    { id = "games_500", name = "Tinh Anh", desc = "Hoàn thành 500 ván", icon = "🥇", metric = "games", target = 500, tier = 6 },
+    { id = "combo_150", name = "Combo VII", desc = "Đạt combo x150", icon = "☄️", metric = "combo", target = 150, tier = 6 },
+    { id = "score_2000", name = "Huyền Thoại III", desc = "Kỷ lục đạt 2.000 điểm", icon = "🏆", metric = "score", target = 2000, tier = 6 },
+    { id = "acc_99", name = "Không Tì Vết", desc = "Độ chính xác 99% qua ≥100 lượt", icon = "💠", metric = "accuracy", target = 99, minAttempts = 100, tier = 6 },
+    { id = "games_1000", name = "Huyền Thoại Bất Diệt", desc = "Hoàn thành 1.000 ván", icon = "👑", metric = "games", target = 1000, tier = 7 },
+    { id = "combo_200", name = "Combo VIII", desc = "Đạt combo x200", icon = "☄️", metric = "combo", target = 200, tier = 7 },
+    { id = "score_3000", name = "NEXUS GRANDMASTER", desc = "Kỷ lục đạt 3.000 điểm", icon = "🌈", metric = "score", target = 3000, tier = 7 },
+}
+
+local function safeProfileNumber(value, fallback)
+    local n = tonumber(value)
+    if not n or n ~= n or n == math.huge or n == -math.huge then return fallback or 0 end
+    return math.max(0, n)
+end
+local savedCareer = type(persistedProfile) == "table" and type(persistedProfile.Career) == "table" and persistedProfile.Career or {}
+local career = {
+    Games = math.floor(safeProfileNumber(savedCareer.Games, 0)),
+    BestScore = math.floor(safeProfileNumber(savedCareer.BestScore, 0)),
+    BestCombo = math.floor(safeProfileNumber(savedCareer.BestCombo, 0)),
+    TotalHits = math.floor(safeProfileNumber(savedCareer.TotalHits, 0)),
+    TotalAttempts = math.floor(safeProfileNumber(savedCareer.TotalAttempts, 0)),
+    TotalRT = safeProfileNumber(savedCareer.TotalRT, 0),
+    TotalRTHits = math.floor(safeProfileNumber(savedCareer.TotalRTHits, 0)),
+    CleanRuns = math.floor(safeProfileNumber(savedCareer.CleanRuns, 0)),
+    AccuracyBestByAttempts = {},
+    ReactionBestBySamples = {},
+}
+for _, attempts in ipairs({10, 25, 50, 100}) do
+    local source = type(savedCareer.AccuracyBestByAttempts) == "table" and savedCareer.AccuracyBestByAttempts or {}
+    career.AccuracyBestByAttempts[tostring(attempts)] = math.min(100, safeProfileNumber(source[tostring(attempts)], 0))
+end
+for _, samples in ipairs({5, 10, 25, 50, 100, 150}) do
+    local source = type(savedCareer.ReactionBestBySamples) == "table" and savedCareer.ReactionBestBySamples or {}
+    career.ReactionBestBySamples[tostring(samples)] = safeProfileNumber(source[tostring(samples)], 0)
+end
+
+local achievementState = {}
+local savedAchievements = type(persistedProfile) == "table" and type(persistedProfile.Achievements) == "table" and persistedProfile.Achievements or {}
+for _, a in ipairs(ACHIEVEMENTS) do
+    local old = type(savedAchievements[a.id]) == "table" and savedAchievements[a.id] or {}
+    achievementState[a.id] = {
+        unlocked = old.unlocked == true,
+        progress = safeProfileNumber(old.progress, 0),
+    }
+end
+
+saveProfile = function()
+    if not filePersistenceAvailable then
+        profileSaveStatus = "⚠️ KHÔNG LƯU ĐƯỢC: executor thiếu readfile/writefile"
+        if saveStatusLabel and saveStatusLabel.Parent then
+            saveStatusLabel.Text = profileSaveStatus
+            saveStatusLabel.TextColor3 = C.NeonYellow
+        end
+        return false
+    end
+    local payload = {
+        Version = 1,
+        SavedAt = os.time(),
+        Career = career,
+        Achievements = achievementState,
+    }
+    local okEncode, encoded = pcall(function() return HttpService:JSONEncode(payload) end)
+    if not okEncode then
+        profileSaveStatus = "⚠️ LƯU LỖI: không mã hóa được hồ sơ"
+        if saveStatusLabel and saveStatusLabel.Parent then
+            saveStatusLabel.Text = profileSaveStatus
+            saveStatusLabel.TextColor3 = C.DangerRed
+        end
+        return false
+    end
+    local okWrite = pcall(writefile, PROFILE_FILE, encoded)
+    profileSaveStatus = okWrite and "💾 ĐÃ LƯU HỒ SƠ VÀO FILE" or "⚠️ LƯU LỖI: writefile bị từ chối"
+    if saveStatusLabel and saveStatusLabel.Parent then
+        saveStatusLabel.Text = profileSaveStatus
+        saveStatusLabel.TextColor3 = okWrite and C.SuccessGreen or C.DangerRed
+    end
+    return okWrite
+end
+
+local achievementRows = {}
+
+local function refreshAchievements()
+	for _, row in pairs(achievementRows) do row:Destroy() end
+	achievementRows = {}
+	for i, a in ipairs(ACHIEVEMENTS) do
+		local st = achievementState[a.id]
+		local unlocked = st.unlocked
+		local row = mk("Frame", {
+			Size = UDim2.new(1, 0, 0, 52),
+			BackgroundColor3 = unlocked and Color3.fromRGB(40, 80, 55) or C.CardTop,
+			BorderSizePixel = 0, LayoutOrder = i, ZIndex = 5,
+		}, achieveScroll)
+		corner(row, 8)
+		stroke(row, unlocked and C.SuccessGreen or C.Dim, 1.5, unlocked and 0.2 or 0.5)
+		mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 40, 0, 40), Position = UDim2.new(0, 8, 0.5, -20), Font = Enum.Font.GothamBlack, Text = a.icon, TextColor3 = unlocked and C.SuccessGreen or C.TextDim, TextSize = 22, ZIndex = 6 }, row)
+		local nm = mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, -190, 0, 16), Position = UDim2.new(0, 54, 0, 8), Font = Enum.Font.GothamBold, Text = a.name, TextColor3 = unlocked and C.SuccessGreen or C.TextWhite, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, row)
+		textStroke(nm, 1, 0.5)
+		local desc = mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, -190, 0, 16), Position = UDim2.new(0, 54, 0, 26), Font = Enum.Font.GothamBold, Text = string.format("TIER %02d  •  %s", a.tier or 1, a.desc), TextColor3 = C.TextDim, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, row)
+		textStroke(desc, 1, 0.6)
+        local progressText = "✅ XONG"
+        if not unlocked then
+            if a.metric == "reaction" then
+                local best = career.ReactionBestBySamples[tostring(a.minSamples)] or 0
+                progressText = best > 0 and string.format("%dms / ≤%d", math.floor(best + 0.5), a.target) or ("0/" .. a.minSamples .. " hits")
+            elseif a.metric == "accuracy" then
+                local best = career.AccuracyBestByAttempts[tostring(a.minAttempts)] or 0
+                progressText = string.format("%d/%d%%", math.min(math.floor(best), a.target), a.target)
+            elseif a.metric == "combo" then
+                progressText = string.format("x%d/x%d", math.min(career.BestCombo, a.target), a.target)
+            else
+                local val = a.metric == "games" and career.Games or (a.metric == "score" and career.BestScore or career.CleanRuns)
+                progressText = string.format("%d/%d", math.min(math.floor(val), a.target), a.target)
+            end
+        end
+		local progressLbl = mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 124, 0, 24), Position = UDim2.new(1, -130, 0.5, -12), Font = Enum.Font.GothamBlack, Text = progressText, TextColor3 = unlocked and C.SuccessGreen or C.NeonYellow, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 6 }, row)
+		textStroke(progressLbl, 1, 0.4)
+		table.insert(achievementRows, row)
+	end
+end
+
+-- SETTINGS
+local tSet = mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 24), Font = Enum.Font.GothamBlack, Text = "⚙️ CÀI ĐẶT", TextColor3 = C.TextWhite, TextSize = 18, ZIndex = 4 }, pageSettings)
+textStroke(tSet, 1.5, 0.4)
+local settingsScroll = mk("ScrollingFrame", {
+	Size = UDim2.new(1, -8, 1, -32), Position = UDim2.new(0, 4, 0, 28),
+	BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+	CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 4,
+}, pageSettings)
+mk("UIListLayout", { Padding = UDim.new(0, 5) }, settingsScroll)
+mk("UIPadding", { PaddingRight = UDim.new(0, 8) }, settingsScroll)
+
+local function makeSlider(label, min, max, default, formatter, onChange, step)
+    step = step or 1
+	local row = mk("Frame", { Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = C.CardTop, BorderSizePixel = 0, ZIndex = 5 }, settingsScroll)
+	corner(row, 8)
+	stroke(row, C.Dim, 1, 0.5)
+	local lbl = mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0.6, 0, 0, 20), Position = UDim2.new(0, 12, 0, 2), Font = Enum.Font.GothamBold, Text = label, TextColor3 = C.TextWhite, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, row)
+	textStroke(lbl, 1, 0.5)
+	local valLbl = mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0.4, -12, 0, 20), Position = UDim2.new(0.6, 0, 0, 2), Font = Enum.Font.GothamBlack, Text = formatter(default), TextColor3 = C.NeonCyan, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 6 }, row)
+	textStroke(valLbl, 1, 0.4)
+	local barBg = mk("Frame", { Size = UDim2.new(1, -24, 0, 6), Position = UDim2.new(0, 12, 0, 30), BackgroundColor3 = Color3.fromRGB(30, 36, 55), BorderSizePixel = 0, ZIndex = 6, Active = true }, row)
+	corner(barBg, UDim.new(1, 0))
+	local barFill = mk("Frame", { Size = UDim2.new((default - min) / (max - min), 0, 1, 0), BackgroundColor3 = C.NeonCyan, BorderSizePixel = 0, ZIndex = 7 }, barBg)
+	corner(barFill, UDim.new(1, 0))
+	local knob = mk("Frame", { Size = UDim2.new(0, 12, 0, 12), Position = UDim2.new((default - min) / (max - min), -6, 0.5, -6), BackgroundColor3 = C.TextWhite, BorderSizePixel = 0, ZIndex = 8 }, barBg)
+	corner(knob, UDim.new(1, 0))
+	stroke(knob, C.NeonCyan, 1.5, 0.3)
+	local dragging = false
+    local function setValue(alpha)
+        alpha = math.clamp(alpha, 0, 1)
+        local rawValue = min + (max - min) * alpha
+        local v = min + math.floor((rawValue - min) / step + 0.5) * step
+        v = math.clamp(v, min, max)
+        local snappedAlpha = (v - min) / (max - min)
+        barFill.Size = UDim2.new(snappedAlpha, 0, 1, 0)
+        knob.Position = UDim2.new(snappedAlpha, -6, 0.5, -6)
+        valLbl.Text = formatter(v)
+        onChange(v)
+    end
+	local function handleInput(input)
+		local abs = barBg.AbsolutePosition.X
+		local w = barBg.AbsoluteSize.X
+		if w > 0 then setValue((input.Position.X - abs) / w) end
+	end
+	barBg.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true; handleInput(input)
+		end
+	end)
+	barBg.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
+	end)
+    connectTracked(UserInputService.InputEnded, function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    connectTracked(UserInputService.InputChanged, function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            handleInput(input)
+        end
+    end)
+end
+
+local toggleSetters = {}
+local function makeToggle(label, default, onChange, syncKey)
+    local row = mk("Frame", { Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = C.CardTop, BorderSizePixel = 0, ZIndex = 5 }, settingsScroll)
+    corner(row, 8)
+    stroke(row, C.Dim, 1, 0.5)
+    mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0.65, 0, 1, 0), Position = UDim2.new(0, 12, 0, 0), Font = Enum.Font.GothamMedium, Text = label, TextColor3 = C.TextWhite, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, row)
+    local state = default
+    local btn = mk("TextButton", { Size = UDim2.new(0, 52, 0, 22), Position = UDim2.new(1, -62, 0.5, -11), BackgroundColor3 = state and C.SuccessGreen or C.Dim, Text = state and "ON" or "OFF", TextColor3 = C.TextWhite, Font = Enum.Font.GothamBold, TextSize = 10, AutoButtonColor = false, ZIndex = 6 }, row)
+    corner(btn, UDim.new(1, 0))
+
+    local function applyState(nextState, playClick)
+        state = not not nextState
+        tween(btn, 0.12, { BackgroundColor3 = state and C.SuccessGreen or C.Dim })
+        btn.Text = state and "ON" or "OFF"
+        if playClick then playSFX("Click") end
+        if onChange then onChange(state) end
+    end
+    btn.MouseButton1Click:Connect(function() applyState(not state, true) end)
+    if syncKey then toggleSetters[syncKey] = function(value) applyState(value, false) end end
+
+    local scale = Instance.new("UIScale")
+    scale.Parent = btn
+    btn.MouseButton1Down:Connect(function() tween(scale, 0.08, { Scale = 0.94 }) end)
+    btn.MouseButton1Up:Connect(function() tween(scale, 0.12, { Scale = 1 }) end)
+    return btn
+end
+
+makeSlider("⏱️ Thời gian trận", 15, 90, CONFIG.GameTime, function(v) return math.floor(v) .. "s" end, function(v) CONFIG.GameTime = math.floor(v) end, 1)
+makeSlider("🎯 Kích thước mục tiêu", 40, 120, CONFIG.TargetSize, function(v) return math.floor(v) .. "px" end, function(v) CONFIG.TargetSize = math.floor(v) end, 1)
+makeSlider("⌛ Vòng đời mục tiêu", 1, 6, CONFIG.TargetLifetime, function(v) return string.format("%.1f", v) end, function(v) CONFIG.TargetLifetime = v end, 0.1)
+makeSlider("⚠️ Tỷ lệ bẫy", 0, 0.2, CONFIG.TrapChance, function(v) return math.floor(v * 100 + 0.5) .. "%" end, function(v) CONFIG.TrapChance = v end, 0.01)
+makeSlider("🎵 Âm lượng nhạc", 0, 1, CONFIG.BGMVolume, function(v) return math.floor(v * 100 + 0.5) .. "%" end, function(v) CONFIG.BGMVolume = v; SFX.BGM.Volume = v end, 0.01)
+makeSlider("🔊 Âm lượng hiệu ứng", 0, 1, CONFIG.SFXVolume, function(v) return math.floor(v * 100 + 0.5) .. "%" end, function(v)
+	CONFIG.SFXVolume = v
+	SFX.Hit.Volume = v; SFX.Miss.Volume = v * 0.7; SFX.Countdown.Volume = v * 1.1
+	SFX.End.Volume = v * 1.3; SFX.Click.Volume = v * 0.35; SFX.Hover.Volume = v * 0.15
+    SFX.Trap.Volume = v * 1.5; SFX.Wrong.Volume = v * 0.8
+    SFX.Achieve.Volume = v * 1.4
+end, 0.01)
+makeToggle("📳 Rung màn hình", CONFIG.ScreenShake, function(v) CONFIG.ScreenShake = v end)
+makeToggle("🎯 Hiện tâm ngắm", CONFIG.ShowCrosshair, function(v) CONFIG.ShowCrosshair = v; crosshair.Visible = v and not UserInputService.TouchEnabled end)
+makeToggle("🎵 Nhạc nền", CONFIG.BGMEnabled, function(v)
+    CONFIG.BGMEnabled = v
+    if v then playSFX("BGM") else SFX.BGM:Pause() end
+    floatBGM.TextColor3 = v and C.NeonCyan or C.Dim
+end, "BGM")
+makeToggle("🔊 Hiệu ứng âm thanh", CONFIG.SFXEnabled, function(v)
+    CONFIG.SFXEnabled = v
+    floatSFX.TextColor3 = v and C.NeonCyan or C.Dim
+end, "SFX")
+
+-- GAME HUD
+local hud = mk("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Visible = false, ZIndex = 50 }, main)
+local hudTop = mk("Frame", { Size = UDim2.new(1, 0, 0, 42), BackgroundColor3 = C.CardBot, BorderSizePixel = 0, ZIndex = 51 }, hud)
+corner(hudTop, 14)
+stroke(hudTop, C.NeonCyan, 1.5, 0.4)
+local function hudStat(name, order, color)
+	local lbl = mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 110, 1, 0), Position = UDim2.new(0, 14 + (order - 1) * 115, 0, 0), Font = Enum.Font.GothamBlack, Text = name .. ": 0", TextColor3 = color, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 52 }, hudTop)
+	textStroke(lbl, 1.5, 0.4)
+	return lbl
+end
+local hudScore = hudStat("🏆", 1, C.TextWhite)
+local hudAcc = hudStat("🎯", 2, C.SuccessGreen)
+local hudCombo = hudStat("🔥", 3, C.NeonPink)
+local hudTime = hudStat("⏱️", 4, C.NeonCyan)
+local hudModeLbl = mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 96, 1, 0), Position = UDim2.new(1, -170, 0, 0), Font = Enum.Font.GothamBlack, Text = "GRIDSHOT", TextColor3 = C.NeonPurple, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 52 }, hudTop)
+textStroke(hudModeLbl, 1.5, 0.4)
+local pauseBtn = mk("TextButton", {
+    Name = "PauseButton", Size = UDim2.fromOffset(26, 26),
+    Position = UDim2.new(1, -64, 0.5, -13), BackgroundColor3 = C.NeonYellow,
+    Text = "Ⅱ", TextColor3 = C.BgDark, Font = Enum.Font.GothamBlack,
+    TextSize = 12, AutoButtonColor = false, ZIndex = 55,
+}, hudTop)
+corner(pauseBtn, UDim.new(1, 0))
+stroke(pauseBtn, C.NeonYellow, 1, 0.2)
+addButtonEffects(pauseBtn, C.NeonYellow, Color3.fromRGB(255, 218, 135), Color3.fromRGB(220, 160, 55))
+local quitBtn = mk("TextButton", { Size = UDim2.new(0, 26, 0, 26), Position = UDim2.new(1, -32, 0.5, -13), BackgroundColor3 = C.DangerRed, Text = "X", TextColor3 = C.TextWhite, Font = Enum.Font.GothamBlack, TextSize = 12, AutoButtonColor = false, ZIndex = 55 }, hudTop)
+hudResponsiveUpdate = function()
+    local hudWidth = hud.AbsoluteSize.X
+    if hudWidth < 1 then hudWidth = main.AbsoluteSize.X end
+    local compactHud = hudWidth < 700
+    local startX = compactHud and 6 or 14
+    -- Reserve room for pause/exit controls on narrow phone screens.
+    local width = compactHud and math.clamp(math.floor((hudWidth - 112) / 4.2), 44, 78) or 110
+    local gap = width + (compactHud and 4 or 5)
+    local statLabels = { hudScore, hudAcc, hudCombo, hudTime }
+    for index, label in ipairs(statLabels) do
+        label.Size = UDim2.new(0, width, 1, 0)
+        label.Position = UDim2.new(0, startX + (index - 1) * gap, 0, 0)
+        label.TextSize = compactHud and (width < 58 and 8 or 9) or 12
+    end
+    hudModeLbl.Visible = hudWidth >= 680
+end
+hudResponsiveUpdate()
+corner(quitBtn, UDim.new(1, 0))
+textStroke(quitBtn, 1.5, 0.4)
+addButtonEffects(quitBtn, C.DangerRed, Color3.fromRGB(255, 120, 140), Color3.fromRGB(200, 40, 60))
+
+local arena = mk("Frame", { Size = UDim2.new(1, -16, 1, -58), Position = UDim2.new(0, 8, 0, 50), BackgroundColor3 = Color3.fromRGB(8, 10, 20), BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 51 }, hud)
+corner(arena, 10)
+stroke(arena, Color3.fromRGB(50, 60, 90), 1)
+
+-- PROMPT LABEL cho chế độ SỐ
+local promptLabel = mk("TextLabel", {
+	Name = "PromptLabel", BackgroundTransparency = 1,
+	Size = UDim2.new(1, 0, 0, 50), Position = UDim2.new(0, 0, 0, 6),
+	Font = Enum.Font.GothamBlack, Text = "", TextColor3 = C.NeonYellow,
+	TextSize = 30, TextXAlignment = Enum.TextXAlignment.Center,
+	ZIndex = 80, Visible = false,
+}, arena)
+textStroke(promptLabel, 3, 0.3)
+
+local missDetector = mk("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "", ZIndex = 51 }, arena)
+
+local centerMsg = mk("TextLabel", {
+    BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1),
+    Font = Enum.Font.GothamBlack, Text = "", TextColor3 = C.TextWhite,
+    TextSize = 24, TextWrapped = true, ZIndex = 100, Visible = false,
+}, arena)
+textStroke(centerMsg, 2.5, 0.3)
+
+-- TARGET TEMPLATE
+local targetTemplate = mk("TextButton", {
+	Size = UDim2.new(0, 75, 0, 75), AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundTransparency = 1, Text = "", AutoButtonColor = false,
+	Visible = false, ZIndex = 53,
+})
+local lifeRing = mk("Frame", { Name = "LifeRing", Size = UDim2.fromScale(1.3, 1.3), Position = UDim2.fromScale(0.5, 0.5), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, ZIndex = 53 }, targetTemplate)
+corner(lifeRing, UDim.new(1, 0))
+stroke(lifeRing, C.NeonYellow, 2.5, 0.2)
+local outerRing = mk("Frame", { Name = "OuterRing", Size = UDim2.fromScale(1, 1), Position = UDim2.fromScale(0.5, 0.5), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, ZIndex = 54 }, targetTemplate)
+corner(outerRing, UDim.new(1, 0))
+stroke(outerRing, C.NeonCyan, 3.5, 0)
+local innerRing = mk("Frame", { Name = "InnerRing", Size = UDim2.fromScale(0.6, 0.6), Position = UDim2.fromScale(0.5, 0.5), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, ZIndex = 55 }, targetTemplate)
+corner(innerRing, UDim.new(1, 0))
+stroke(innerRing, C.NeonPink, 2.5, 0)
+local core = mk("Frame", { Name = "Core", Size = UDim2.fromScale(0.25, 0.25), Position = UDim2.fromScale(0.5, 0.5), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = C.NeonCyan, ZIndex = 56 }, targetTemplate)
+corner(core, UDim.new(1, 0))
+
+-- Số hiển thị trên target (chế độ SỐ)
+local numberLabel = mk("TextLabel", {
+	Name = "NumberLabel", BackgroundTransparency = 1,
+	Size = UDim2.fromScale(1, 1), Font = Enum.Font.GothamBlack,
+	Text = "", TextColor3 = C.TextWhite, TextSize = 26,
+	ZIndex = 59, Visible = false,
+}, targetTemplate)
+textStroke(numberLabel, 2.5, 0.2)
+
+local trapIcon = mk("TextLabel", {
+	Name = "TrapIcon", BackgroundTransparency = 1,
+	Size = UDim2.fromScale(1, 1), Font = Enum.Font.GothamBlack,
+	Text = "!", TextColor3 = Color3.fromRGB(255, 255, 255),
+	TextSize = 32, TextTransparency = 1, ZIndex = 58, Visible = false,
+}, targetTemplate)
+
+local targets = {}
+for i = 1, 8 do
+	local t = targetTemplate:Clone()
+	t.Name = "Target_" .. i
+	t.Parent = arena
+	targets[i] = t
+end
+connectTracked(RunService.RenderStepped, function(dt)
+    for _, t in ipairs(targets) do
+        if t.Visible then
+            t.OuterRing.Rotation = (t.OuterRing.Rotation + 70 * dt) % 360
+            t.InnerRing.Rotation = (t.InnerRing.Rotation - 100 * dt) % 360
+        end
+    end
+end)
+
+-- VFX
+local function spawnRipple(x, y, color)
+	local r = mk("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, x, 0, y), Size = UDim2.new(0, 10, 0, 10), BackgroundColor3 = color, BackgroundTransparency = 0.2, BorderSizePixel = 0, ZIndex = 60 }, arena)
+	corner(r, UDim.new(1, 0))
+	tween(r, 0.5, { Size = UDim2.new(0, 150, 0, 150), BackgroundTransparency = 1 })
+	task.delay(0.5, function() r:Destroy() end)
+end
+local function spawnBurst(x, y, color)
+	for i = 1, 8 do
+		local p = mk("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, x, 0, y), Size = UDim2.new(0, 6, 0, 6), BackgroundColor3 = color, BorderSizePixel = 0, ZIndex = 61 }, arena)
+		corner(p, UDim.new(1, 0))
+		local angle = (i / 8) * math.pi * 2 + math.random() * 0.4
+		local dist = 40 + math.random(20, 50)
+		tween(p, 0.5, { Position = UDim2.new(0, x + math.cos(angle) * dist, 0, y + math.sin(angle) * dist), Size = UDim2.new(0, 2, 0, 2), BackgroundTransparency = 1 })
+		task.delay(0.5, function() p:Destroy() end)
+	end
+end
+local function spawnPopup(x, y, text, color)
+	local lbl = mk("TextLabel", { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0, x, 0, y), Size = UDim2.new(0, 100, 0, 20), BackgroundTransparency = 1, Font = Enum.Font.GothamBlack, Text = text, TextColor3 = color, TextSize = 18, ZIndex = 62 }, arena)
+	textStroke(lbl, 2, 0.3)
+	tween(lbl, 0.8, { Position = UDim2.new(0, x, 0, y - 40), TextTransparency = 1 })
+	task.delay(0.8, function() lbl:Destroy() end)
+end
+local shakeConnection
+local shakeElapsed = 0
+local shakeIntensity = 0
+local shakeOrigin
+local function screenShake(intensity)
+    if not CONFIG.ScreenShake or not alive or not main.Parent then return end
+    shakeIntensity = math.max(shakeIntensity, intensity)
+    shakeElapsed = 0
+    if shakeConnection and shakeConnection.Connected then return end
+
+    shakeOrigin = main.Position
+    shakeConnection = connectTracked(RunService.RenderStepped, function(dt)
+        if not alive or not main.Parent then
+            if shakeConnection then shakeConnection:Disconnect() end
+            shakeConnection = nil
+            return
+        end
+        shakeElapsed += dt
+        if shakeElapsed >= 0.15 then
+            main.Position = shakeOrigin
+            if shakeConnection then shakeConnection:Disconnect() end
+            shakeConnection = nil
+            shakeIntensity = 0
+            return
+        end
+        main.Position = shakeOrigin + UDim2.new(0, math.random(-shakeIntensity, shakeIntensity), 0, math.random(-shakeIntensity, shakeIntensity))
+    end)
+end
+
+-- STATE
+local state = {
+	Score = 0, Combo = 0, BestCombo = 0, TimeLeft = 30, Playing = false,
+	Paused = false, PausedAt = 0,
+	Hits = 0, Misses = 0, LastHitTime = 0,
+	ReactionSum = 0, ReactionCount = 0, ReactionList = {},
+    Mode = "Gridshot", TrapsSpawned = 0, TrapsHit = 0,
+    TargetNumber = nil, RoundId = 0, Finishing = false, EndTime = 0,
+}
+local session = {
+    Games = 0, Best = 0, TotalHits = 0, TotalMisses = 0,
+    TotalRT = 0, TotalRTHits = 0, Leaderboard = {}, ModesPlayed = {}, Survived = 0,
+}
+local finishGame
+local lastTargetActivation = 0
+
+-- SPAWN
+local function getArenaSize()
+    local size = arena.AbsoluteSize
+    if size.X < 10 or size.Y < 10 then
+        return Vector2.new(math.max(size.X, 100), math.max(size.Y, 100))
+    end
+    return size
+end
+local function isOverlapping(x, y, ignore, radius)
+	for _, t in ipairs(targets) do
+		if t ~= ignore and t.Visible and t:GetAttribute("PosX") then
+			local ox = t:GetAttribute("PosX")
+			local oy = t:GetAttribute("PosY")
+			local otherR = t.AbsoluteSize.X / 2
+			if math.sqrt((x - ox)^2 + (y - oy)^2) < radius + otherR + 20 then return true end
+		end
+	end
+	return false
+end
+local function findFreePosition(ignore, size)
+	local as = getArenaSize()
+	local r = size / 2
+	local pad = math.max(45, r + 8)
+    local minX, maxX = pad, as.X - pad
+    local topReserve = state.Mode == "Numbers" and 62 or 8
+    local minY, maxY = math.max(pad, topReserve + r + 4), as.Y - pad
+	if maxX <= minX or maxY <= minY then return as.X / 2, as.Y / 2 end
+	for _ = 1, 30 do
+		local x = math.random(math.floor(minX), math.floor(maxX))
+		local y = math.random(math.floor(minY), math.floor(maxY))
+		if not isOverlapping(x, y, ignore, r) then return x, y end
+	end
+	return math.random(math.floor(minX), math.floor(maxX)), math.random(math.floor(minY), math.floor(maxY))
+end
+
+local function respawnTarget(target, sizeOverride, forceTrap)
+	local size = (sizeOverride or CONFIG.TargetSize) * targetScaleFactor
+	local x, y = findFreePosition(target, size)
+	target:SetAttribute("PosX", x)
+	target:SetAttribute("PosY", y)
+	target:SetAttribute("SpawnTime", os.clock())
+
+    target:SetAttribute("Number", nil)
+    target.NumberLabel.Text = ""
+    local canTrap = state.Score >= CONFIG.TrapMinScore
+    local isTrap = forceTrap
+	if isTrap == nil then
+		isTrap = canTrap and (math.random() < CONFIG.TrapChance)
+	end
+	target:SetAttribute("IsTrap", isTrap)
+
+	if isTrap then
+		state.TrapsSpawned += 1
+		target.OuterRing.UIStroke.Color = C.TrapRed
+		target.InnerRing.UIStroke.Color = C.TrapDark
+		target.Core.BackgroundColor3 = C.TrapRed
+		target.TrapIcon.Visible = true
+		target.TrapIcon.TextTransparency = 0
+		target.NumberLabel.Visible = false
+		target.LifeRing.UIStroke.Color = C.TrapRed
+	else
+		local col = PALETTE[math.random(1, #PALETTE)]
+		target.OuterRing.UIStroke.Color = col
+		target.InnerRing.UIStroke.Color = col
+		target.Core.BackgroundColor3 = col
+		target.TrapIcon.Visible = false
+		target.TrapIcon.TextTransparency = 1
+		if state.Mode == "Numbers" then
+			target.NumberLabel.Visible = true
+		else
+			target.NumberLabel.Visible = false
+		end
+		target.LifeRing.UIStroke.Color = C.NeonYellow
+	end
+
+	target.Position = UDim2.new(0, x, 0, y)
+	target.Size = UDim2.new(0, 0, 0, 0)
+	target.Visible = true
+	target.LifeRing.UIStroke.Transparency = 0.2
+	target.LifeRing.Size = UDim2.fromScale(1.3, 1.3)
+	tween(target, 0.22, { Size = UDim2.new(0, size, 0, size) }, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+end
+
+-- NUMBER MODE: only choose from visible, non-trap targets so the prompt is always achievable.
+local function newNumberRound()
+    local activeTargets = {}
+    for _, target in ipairs(targets) do
+        if target.Visible and not target:GetAttribute("IsTrap") then
+            table.insert(activeTargets, target)
+        end
+    end
+
+    if #activeTargets == 0 then
+        local rescueTarget = targets[1]
+        respawnTarget(rescueTarget, CONFIG.TargetSize * 0.9, false)
+        activeTargets[1] = rescueTarget
+    end
+
+    local used = {}
+    for _, target in ipairs(activeTargets) do
+        local number
+        repeat number = math.random(1, 99) until not used[number]
+        used[number] = true
+        target.NumberLabel.Text = tostring(number)
+        target.NumberLabel.Visible = true
+        target:SetAttribute("Number", number)
+    end
+
+    local chosen = activeTargets[math.random(1, #activeTargets)]
+    state.TargetNumber = chosen:GetAttribute("Number")
+    promptLabel.Text = "TÌM SỐ  /  " .. tostring(state.TargetNumber)
+end
+
+-- MODES
+local modeRuntime = { velocities = {} }
+local function clearAllTargets()
+	for _, t in ipairs(targets) do
+		t.Visible = false
+		t:SetAttribute("PosX", nil); t:SetAttribute("PosY", nil)
+		t:SetAttribute("SpawnTime", nil); t:SetAttribute("IsTrap", nil)
+		t:SetAttribute("Number", nil)
+		t.NumberLabel.Visible = false
+	end
+	promptLabel.Visible = false
+	modeRuntime.velocities = {}
+end
+
+local function setupMode(mode)
+	clearAllTargets()
+	state.Mode = mode
+	hudModeLbl.Text = string.upper(mode)
+
+	if mode == "Gridshot" then
+		for i = 1, 3 do respawnTarget(targets[i]) end
+	elseif mode == "Flick" then
+		respawnTarget(targets[1], CONFIG.TargetSize * 0.95)
+	elseif mode == "Tracking" then
+		local t = targets[1]
+		respawnTarget(t, CONFIG.TargetSize * 0.9)
+		modeRuntime.velocities[t] = { vx = (math.random() - 0.5) * 260, vy = (math.random() - 0.5) * 260 }
+    elseif mode == "Numbers" then
+        promptLabel.Visible = true
+        for i = 1, 4 do respawnTarget(targets[i], CONFIG.TargetSize * 0.9) end
+        newNumberRound()
+	end
+end
+
+local function updateHUD()
+	hudScore.Text = "🏆 " .. state.Score
+	local total = state.Hits + state.Misses
+	local acc = total > 0 and (state.Hits / total * 100) or 0
+	hudAcc.Text = string.format("🎯 %.0f%%", acc)
+	hudCombo.Text = "🔥 x" .. state.Combo
+	hudCombo.TextColor3 = state.Combo >= 5 and C.NeonPurple or C.NeonPink
+	hudTime.Text = "⏱️ " .. state.TimeLeft
+	hudTime.TextColor3 = state.TimeLeft <= 5 and C.DangerRed or C.NeonCyan
+end
+
+-- ACHIEVEMENTS unlock
+local function unlockAchievement(id)
+	local a
+	for _, x in ipairs(ACHIEVEMENTS) do if x.id == id then a = x break end end
+	if not a or achievementState[id].unlocked then return end
+	achievementState[id].unlocked = true
+	playSFX("Achieve")
+    local popupWidth = math.max(180, math.min(280, camera.ViewportSize.X - 20))
+    local topInset = Vector2.zero
+    pcall(function() topInset = select(1, GuiService:GetGuiInset()) end)
+    local popupY = math.max(14, topInset.Y + 12)
+    local popup = mk("Frame", {
+        Size = UDim2.fromOffset(popupWidth, 54), Position = UDim2.new(1, 20, 0, popupY),
+        BackgroundColor3 = C.CardTop, BorderSizePixel = 0, ZIndex = 300,
+    }, screenGui)
+    corner(popup, 10)
+    stroke(popup, C.SuccessGreen, 1.5, 0.2)
+    mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, -24, 0, 18), Position = UDim2.new(0, 12, 0, 6), Font = Enum.Font.GothamBold, Text = "THÀNH TỰU MỚI", TextColor3 = C.SuccessGreen, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 301 }, popup)
+    mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(1, -24, 0, 22), Position = UDim2.new(0, 12, 0, 24), Font = Enum.Font.GothamMedium, Text = a.icon .. "  " .. a.name, TextColor3 = C.TextWhite, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 301 }, popup)
+    tween(popup, 0.4, { Position = UDim2.new(1, -popupWidth - 10, 0, popupY) }, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    task.delay(3.5, function()
+        if not alive or not popup.Parent then return end
+        tween(popup, 0.4, { Position = UDim2.new(1, 20, 0, popupY) })
+        task.delay(0.5, function()
+            if popup.Parent then popup:Destroy() end
+        end)
+    end)
+	-- Progress rows are refreshed once after all values have been updated.
+end
+
+local function achievementMetric(a)
+    if a.metric == "games" then return career.Games end
+    if a.metric == "score" then return career.BestScore end
+    if a.metric == "combo" then return career.BestCombo end
+    if a.metric == "clean" then return career.CleanRuns end
+    if a.metric == "accuracy" then
+        return career.AccuracyBestByAttempts[tostring(a.minAttempts)] or 0
+    end
+    if a.metric == "reaction" then
+        return career.ReactionBestBySamples[tostring(a.minSamples)] or 0
+    end
+    return 0
+end
+
+local function achievementIsComplete(a, value)
+    if a.metric == "reaction" then return value > 0 and value <= a.target end
+    return value >= a.target
+end
+
+local function checkAchievements()
+    for _, a in ipairs(ACHIEVEMENTS) do
+        local value = achievementMetric(a)
+        local st = achievementState[a.id]
+        if a.metric == "reaction" then
+            st.progress = value > 0 and math.max(0, a.target - math.floor(value)) or 0
+        else
+            st.progress = math.min(math.floor(value), a.target)
+        end
+        if not st.unlocked and achievementIsComplete(a, value) then
+            unlockAchievement(a.id)
+        end
+    end
+    refreshAchievements()
+    saveProfile()
+end
+
+-- GAME FLOW
+local function startGame(mode, roundId)
+    state.Score = 0; state.Combo = 0; state.BestCombo = 0
+    state.TimeLeft = CONFIG.GameTime; state.Playing = false; state.Finishing = false
+    state.Paused = false; state.PausedAt = 0
+    lastTargetActivation = 0
+    pauseBtn.Text = "Ⅱ"
+    state.EndTime = 0
+    state.Hits = 0; state.Misses = 0
+    state.ReactionSum = 0; state.ReactionCount = 0; state.ReactionList = {}
+    state.TrapsSpawned = 0; state.TrapsHit = 0; state.TargetNumber = nil
+    state.Mode = mode
+    updateHUD()
+    centerMsg.Visible = true
+
+    for i = 1, 3 do
+        if not alive or roundId ~= state.RoundId then return end
+        centerMsg.Text = tostring(4 - i)
+        centerMsg.TextColor3 = C.NeonCyan
+        centerMsg.TextSize = 36
+        centerMsg.TextTransparency = 0
+        playSFX("Countdown")
+        tween(centerMsg, 0.4, { TextSize = 70, TextTransparency = 1 })
+        task.wait(0.55)
+    end
+    if not alive or roundId ~= state.RoundId then return end
+    centerMsg.Text = "GO!"
+    centerMsg.TextColor3 = C.NeonPink
+    centerMsg.TextSize = 36
+    centerMsg.TextTransparency = 0
+    tween(centerMsg, 0.45, { TextSize = 90, TextTransparency = 1 })
+    task.wait(0.3)
+    if not alive or roundId ~= state.RoundId then return end
+    centerMsg.Visible = false
+    state.EndTime = os.clock() + CONFIG.GameTime
+    state.TimeLeft = CONFIG.GameTime
+    state.Playing = true
+    state.LastHitTime = os.clock()
+    updateHUD()
+    setupMode(mode)
+end
+
+local function enterGame(mode)
+    if not alive then return end
+    state.RoundId += 1
+    local roundId = state.RoundId
+    session.ModesPlayed[mode] = true
+    for _, page in pairs(pages) do page.Visible = false end
+    hud.Visible = true
+    navBar.Visible = false
+    floatToggle.Visible = false
+    startGame(mode, roundId)
+end
+
+local function exitGame()
+    state.RoundId += 1 -- invalidates in-flight countdowns and delayed end screens
+    state.Playing = false
+    state.Paused = false
+    state.PausedAt = 0
+    pauseBtn.Text = "Ⅱ"
+    state.Finishing = false
+    centerMsg.Visible = false
+    clearAllTargets()
+    hud.Visible = false
+    navBar.Visible = true
+    main.Visible = true
+    background.Visible = true
+    floatToggle.Visible = false
+    showPage("Play")
+end
+
+local function togglePause()
+    if not state.Playing or state.Finishing then return end
+    if not state.Paused then
+        state.Paused = true
+        state.PausedAt = os.clock()
+        pauseBtn.Text = "▶"
+        centerMsg.Text = "⏸  TẠM DỪNG\nNhấn P hoặc ▶ để tiếp tục"
+        centerMsg.TextColor3 = C.NeonYellow
+        centerMsg.TextSize = 22
+        centerMsg.TextTransparency = 0
+        centerMsg.Visible = true
+    else
+        local pausedFor = math.max(0, os.clock() - (state.PausedAt or os.clock()))
+        state.EndTime += pausedFor
+        state.LastHitTime += pausedFor
+        -- Preserve target lifetime while paused, so targets do not instantly expire on resume.
+        for _, target in ipairs(targets) do
+            local spawnedAt = target:GetAttribute("SpawnTime")
+            if target.Visible and spawnedAt then
+                target:SetAttribute("SpawnTime", spawnedAt + pausedFor)
+            end
+        end
+        state.Paused = false
+        state.PausedAt = 0
+        pauseBtn.Text = "Ⅱ"
+        centerMsg.Visible = false
+        updateHUD()
+    end
+    playSFX("Click")
+end
+
+pauseBtn.Activated:Connect(togglePause)
+connectTracked(UserInputService.InputBegan, function(input, gameProcessed)
+    if gameProcessed or not alive then return end
+    if input.KeyCode == Enum.KeyCode.P then
+        togglePause()
+    elseif input.KeyCode == Enum.KeyCode.Escape and hud.Visible and state.Playing and not state.Finishing then
+        exitGame()
+    end
+end)
+
+for id, card in pairs(modeCards) do
+	card.MouseButton1Click:Connect(function() playSFX("Click"); enterGame(id) end)
+end
+quitBtn.MouseButton1Click:Connect(function() if not state.Finishing then exitGame() end end)
+
+-- TRAP
+local function triggerTrap(target)
+    if not state.Playing or state.Paused or state.Finishing then return end
+    state.TrapsHit += 1
+    state.Playing = false
+    playSFX("Trap")
+    screenShake(15)
+    local flash = mk("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = C.TrapRed, BackgroundTransparency = 0.5, BorderSizePixel = 0, ZIndex = 500 }, screenGui)
+    tween(flash, 0.5, { BackgroundTransparency = 1 })
+    task.delay(0.6, function() if flash.Parent then flash:Destroy() end end)
+    local abs = target.AbsolutePosition - arena.AbsolutePosition
+    local cx = abs.X + target.AbsoluteSize.X / 2
+    local cy = abs.Y + target.AbsoluteSize.Y / 2
+    spawnBurst(cx, cy, C.TrapRed)
+    spawnRipple(cx, cy, C.TrapRed)
+    spawnPopup(cx, cy, "BẪY!", C.TrapRed)
+    finishGame("trap", state.RoundId)
+end
+
+-- HIT logic
+local function doCorrectHit(target)
+	local now = os.clock()
+	local spawn = target:GetAttribute("SpawnTime") or now
+	local rt = now - spawn
+	state.ReactionSum += rt
+	state.ReactionCount += 1
+	table.insert(state.ReactionList, rt)
+	if now - state.LastHitTime <= CONFIG.ComboWindow then
+		state.Combo += 1
+	else
+		state.Combo = 1
+	end
+	state.LastHitTime = now
+	if state.Combo > state.BestCombo then state.BestCombo = state.Combo end
+	local gained = 1 + math.floor(state.Combo / 5)
+	state.Score += gained
+	state.Hits += 1
+	updateHUD()
+	local abs = target.AbsolutePosition - arena.AbsolutePosition
+	local cx = abs.X + target.AbsoluteSize.X / 2
+	local cy = abs.Y + target.AbsoluteSize.Y / 2
+	local col = target.Core.BackgroundColor3
+	spawnRipple(cx, cy, col)
+	spawnBurst(cx, cy, col)
+	spawnPopup(cx, cy, "+" .. gained, col)
+	SFX.Hit.PlaybackSpeed = 1 + math.min(state.Combo, 15) * 0.05
+	playSFX("Hit")
+	screenShake(math.min(state.Combo, 8))
+end
+
+local function doWrongHit(x, y)
+	state.Misses += 1
+	state.Combo = 0
+	updateHUD()
+	playSFX("Wrong")
+	spawnRipple(x, y, C.DangerRed)
+	spawnPopup(x, y, "SAI SỐ!", C.DangerRed)
+end
+
+local function onHit(target)
+    if not state.Playing or state.Paused or not target.Visible then return end
+    -- Suppress duplicate Activated events while keeping fast, legitimate aim shots responsive.
+    local now = os.clock()
+    if now - lastTargetActivation < 0.035 then return end
+    lastTargetActivation = now
+
+	-- Chế độ SỐ: check số đúng/sai TRƯỚC khi xử lý
+	if state.Mode == "Numbers" and not target:GetAttribute("IsTrap") then
+		local clickedNum = target:GetAttribute("Number")
+		local abs = target.AbsolutePosition - arena.AbsolutePosition
+		local cx = abs.X + target.AbsoluteSize.X / 2
+		local cy = abs.Y + target.AbsoluteSize.Y / 2
+		if clickedNum ~= state.TargetNumber then
+		            doWrongHit(cx, cy)
+            return
+		end
+		doCorrectHit(target)
+        -- Refresh the live number set atomically (no yield during input handling).
+        for i = 1, 4 do respawnTarget(targets[i], CONFIG.TargetSize * 0.9) end
+        newNumberRound()
+		return
+	end
+
+	-- Bẫy
+	if target:GetAttribute("IsTrap") then
+		triggerTrap(target)
+		return
+	end
+
+	-- Các chế độ khác
+	doCorrectHit(target)
+	local baseSize = CONFIG.TargetSize
+	if state.Mode == "Gridshot" then
+		respawnTarget(target, baseSize)
+	elseif state.Mode == "Flick" then
+		respawnTarget(target, baseSize * 0.95)
+    elseif state.Mode == "Tracking" then
+        respawnTarget(target, baseSize * 0.9)
+        if not target:GetAttribute("IsTrap") then
+            modeRuntime.velocities[target] = { vx = (math.random() - 0.5) * 260, vy = (math.random() - 0.5) * 260 }
+        else
+            modeRuntime.velocities[target] = nil
+        end
+	end
+end
+
+for _, t in ipairs(targets) do
+    t.Activated:Connect(function() onHit(t) end)
+end
+
+missDetector.Activated:Connect(function()
+	if not state.Playing or state.Paused then return end
+	state.Misses += 1
+	state.Combo = 0
+	updateHUD()
+	playSFX("Miss")
+	local m = UserInputService:GetMouseLocation()
+	local abs = m - arena.AbsolutePosition
+	spawnRipple(abs.X, abs.Y, C.DangerRed)
+	spawnPopup(abs.X, abs.Y, "MISS", C.DangerRed)
+end)
+
+-- Runtime loop
+connectTracked(RunService.RenderStepped, function(dt)
+    if not state.Playing or state.Paused then return end
+    if os.clock() - state.LastHitTime > CONFIG.ComboWindow and state.Combo > 0 then
+        state.Combo = 0
+        updateHUD()
+    end
+    hudTime.Text = "⏱️ " .. state.TimeLeft
+    hudTime.TextColor3 = state.TimeLeft <= 5 and C.DangerRed or C.NeonCyan
+
+    for _, target in ipairs(targets) do
+        if target.Visible and target:GetAttribute("SpawnTime") then
+            local age = os.clock() - target:GetAttribute("SpawnTime")
+            local isTrap = target:GetAttribute("IsTrap")
+            if state.Mode == "Tracking" and not isTrap then
+                local velocity = modeRuntime.velocities[target]
+                if velocity then
+                    local arenaSize = arena.AbsoluteSize
+                    local x = (target:GetAttribute("PosX") or 0) + velocity.vx * dt
+                    local y = (target:GetAttribute("PosY") or 0) + velocity.vy * dt
+                    local radius = target.AbsoluteSize.X / 2
+                    local maxX, maxY = math.max(radius + 10, arenaSize.X - radius - 10), math.max(radius + 10, arenaSize.Y - radius - 10)
+                    if x < radius + 10 or x > maxX then velocity.vx = -velocity.vx; x = math.clamp(x, radius + 10, maxX) end
+                    if y < radius + 10 or y > maxY then velocity.vy = -velocity.vy; y = math.clamp(y, radius + 10, maxY) end
+                    target:SetAttribute("PosX", x); target:SetAttribute("PosY", y)
+                    target.Position = UDim2.new(0, x, 0, y)
+                end
+                target.LifeRing.UIStroke.Transparency = 1
+            else
+                local remaining = CONFIG.TargetLifetime - age
+                if remaining <= 0 then
+                    if not isTrap then
+                        state.Misses += 1
+                        state.Combo = 0
+                        updateHUD()
+                        playSFX("Miss")
+                    end
+                    local baseSize = CONFIG.TargetSize
+                    local size = state.Mode == "Numbers" and baseSize * 0.9 or (state.Mode == "Flick" and baseSize * 0.95 or baseSize)
+                    respawnTarget(target, size)
+                    if state.Mode == "Tracking" then
+                        if not target:GetAttribute("IsTrap") then
+                            modeRuntime.velocities[target] = { vx = (math.random() - 0.5) * 260, vy = (math.random() - 0.5) * 260 }
+                        else
+                            modeRuntime.velocities[target] = nil
+                        end
+                    elseif state.Mode == "Numbers" then
+                        newNumberRound()
+                    end
+                else
+                    local pct = math.clamp(remaining / CONFIG.TargetLifetime, 0, 1)
+                    target.LifeRing.Size = UDim2.fromScale(0.8 + pct * 0.5, 0.8 + pct * 0.5)
+                    target.LifeRing.UIStroke.Transparency = 0.2 + (1 - pct) * 0.5
+                    target.LifeRing.UIStroke.Color = isTrap and C.TrapRed or (pct > 0.4 and C.NeonYellow or C.DangerRed)
+                end
+            end
+        end
+    end
+end)
+
+-- Timer uses a monotonic deadline so scheduler delays do not accumulate as drift.
+task.spawn(function()
+    while alive do
+        task.wait(0.05)
+        if alive and state.Playing and not state.Paused and not state.Finishing then
+            local remaining = math.max(0, math.ceil(state.EndTime - os.clock()))
+            if remaining ~= state.TimeLeft then
+                state.TimeLeft = remaining
+                updateHUD()
+                if remaining <= 5 and remaining > 0 then
+                    centerMsg.Text = tostring(remaining)
+                    centerMsg.TextColor3 = C.DangerRed
+                    centerMsg.TextSize = 44
+                    centerMsg.TextTransparency = 0
+                    centerMsg.Visible = true
+                    tween(centerMsg, 0.8, { TextTransparency = 1 })
+                end
+            end
+            if remaining <= 0 then
+                playSFX("End")
+                finishGame("time", state.RoundId)
+            end
+        end
+    end
+end)
+
+-- Leaderboard
+local function refreshLeaderboard()
+	for _, ch in ipairs(lbContainer:GetChildren()) do
+		if ch:IsA("Frame") then ch:Destroy() end
+	end
+	for i, entry in ipairs(session.Leaderboard) do
+		local row = mk("Frame", { Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = i == 1 and Color3.fromRGB(70, 55, 20) or C.CardBot, BorderSizePixel = 0, LayoutOrder = i, ZIndex = 5 }, lbContainer)
+		corner(row, 5)
+		mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 26, 1, 0), Position = UDim2.new(0, 6, 0, 0), Font = Enum.Font.GothamBlack, Text = "#" .. i, TextColor3 = i == 1 and C.NeonYellow or C.TextDim, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, row)
+		mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 110, 1, 0), Position = UDim2.new(0, 38, 0, 0), Font = Enum.Font.GothamBold, Text = entry.mode, TextColor3 = C.NeonCyan, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, row)
+		mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 50, 1, 0), Position = UDim2.new(0.55, 0, 0, 0), Font = Enum.Font.GothamBold, Text = entry.score, TextColor3 = C.TextWhite, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, row)
+		mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 70, 1, 0), Position = UDim2.new(0.75, 0, 0, 0), Font = Enum.Font.GothamBold, Text = string.format("%.1f%%", entry.accuracy), TextColor3 = C.SuccessGreen, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 6 }, row)
+		mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.new(0, 60, 1, 0), Position = UDim2.new(1, -64, 0, 0), Font = Enum.Font.Gotham, Text = math.floor(entry.avgRT) .. "ms", TextColor3 = C.NeonPink, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Right, ZIndex = 6 }, row)
+	end
+end
+
+local function addLeaderboardEntry(entry)
+	table.insert(session.Leaderboard, entry)
+	table.sort(session.Leaderboard, function(a, b) return a.score > b.score end)
+	while #session.Leaderboard > 10 do table.remove(session.Leaderboard) end
+	refreshLeaderboard()
+end
+
+finishGame = function(reason, roundId)
+    reason = reason or "time"
+    roundId = roundId or state.RoundId
+    if not alive or roundId ~= state.RoundId or state.Finishing then return end
+
+    state.Finishing = true
+    state.Playing = false
+    state.Paused = false
+    state.PausedAt = 0
+    pauseBtn.Text = "Ⅱ"
+    clearAllTargets()
+    promptLabel.Visible = false
+
+    local total = state.Hits + state.Misses
+    local accuracy = total > 0 and (state.Hits / total * 100) or 0
+    local avgRT = state.ReactionCount > 0 and (state.ReactionSum / state.ReactionCount * 1000) or 0
+    local bestRT, worstRT = math.huge, 0
+    for _, reaction in ipairs(state.ReactionList) do
+        if reaction < bestRT then bestRT = reaction end
+        if reaction > worstRT then worstRT = reaction end
+    end
+    if bestRT == math.huge then bestRT = 0 end
+    bestRT *= 1000
+    worstRT *= 1000
+
+    session.Games += 1
+    session.Best = math.max(session.Best, state.Score)
+    session.TotalHits += state.Hits
+    session.TotalMisses += state.Misses
+    session.TotalRT += state.ReactionSum
+    session.TotalRTHits += state.ReactionCount
+    if reason ~= "trap" and state.TrapsHit == 0 then session.Survived += 1 end
+
+    -- Lifetime/career stats drive the progressively harder achievement ladder.
+    career.Games += 1
+    career.BestScore = math.max(career.BestScore, state.Score)
+    career.BestCombo = math.max(career.BestCombo, state.BestCombo)
+    career.TotalHits += state.Hits
+    career.TotalAttempts += total
+    career.TotalRT += state.ReactionSum
+    career.TotalRTHits += state.ReactionCount
+    if reason ~= "trap" and state.TrapsHit == 0 then career.CleanRuns += 1 end
+
+    for _, attemptsRequired in ipairs({10, 25, 50, 100}) do
+        if total >= attemptsRequired then
+            local key = tostring(attemptsRequired)
+            career.AccuracyBestByAttempts[key] = math.max(career.AccuracyBestByAttempts[key] or 0, accuracy)
+        end
+    end
+    for _, samplesRequired in ipairs({5, 10, 25, 50, 100, 150}) do
+        if state.ReactionCount >= samplesRequired then
+            local key = tostring(samplesRequired)
+            local oldBest = career.ReactionBestBySamples[key] or 0
+            if oldBest == 0 or avgRT < oldBest then career.ReactionBestBySamples[key] = avgRT end
+        end
+    end
+
+    addLeaderboardEntry({ score = state.Score, accuracy = accuracy, avgRT = avgRT, mode = state.Mode, time = os.time() })
+    sessGamesVal.Text = tostring(session.Games)
+    sessBestVal.Text = tostring(session.Best)
+    local attempts = session.TotalHits + session.TotalMisses
+    local totalAcc = attempts > 0 and (session.TotalHits / attempts * 100) or 0
+    sessAvgAccVal.Text = string.format("%.1f%%", totalAcc)
+    local totalAvgRT = session.TotalRTHits > 0 and (session.TotalRT / session.TotalRTHits * 1000) or 0
+    sessAvgRTVal.Text = math.floor(totalAvgRT) .. "ms"
+    checkAchievements()
+
+    if reason == "trap" then
+        centerMsg.Text = string.format("💥 BẪY  /  KẾT THÚC\nĐiểm: %d  •  Chính xác: %.1f%%\nCombo tốt nhất: x%d", state.Score, accuracy, state.BestCombo)
+        centerMsg.TextColor3 = C.TrapRed
+    else
+        centerMsg.Text = string.format("🏁 KẾT THÚC\nĐiểm: %d  •  CX: %.1f%%\nCombo: x%d  •  RT TB: %dms\nRT tốt: %dms  •  RT tệ: %dms", state.Score, accuracy, state.BestCombo, math.floor(avgRT), math.floor(bestRT), math.floor(worstRT))
+        centerMsg.TextColor3 = C.TextWhite
+    end
+    centerMsg.TextSize = 18
+    centerMsg.TextTransparency = 0
+    centerMsg.Visible = true
+    local duration = reason == "trap" and 3 or 5
+    task.delay(duration, function()
+        if not alive or roundId ~= state.RoundId then return end
+        centerMsg.Visible = false
+        exitGame()
+    end)
+end
+
+-- Toolbar / navigation actions.
+minimizeBtn.MouseButton1Click:Connect(function()
+    if state.Playing or state.Finishing then return end
+    playSFX("Click")
+    main.Visible = false
+    background.Visible = false
+    floatToggle.Visible = true
+    SFX.BGM:Pause()
+end)
+
+-- Hold and drag the launcher to reposition it. A short tap reopens the panel.
+local launcherDragging = false
+local launcherDidMove = false
+local launcherStartInput = nil
+local launcherStartPointer = nil
+local launcherStartPosition = nil
+floatToggle.InputBegan:Connect(function(input)
+    if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+        return
+    end
+    if not floatToggle.Visible then return end
+    launcherDragging = true
+    launcherDidMove = false
+    launcherStartInput = input
+    launcherStartPointer = Vector2.new(input.Position.X, input.Position.Y)
+    launcherStartPosition = launcherPosition or Vector2.new(toolbar.Position.X.Offset, toolbar.Position.Y.Offset)
+end)
+connectTracked(UserInputService.InputChanged, function(input)
+    if not launcherDragging then return end
+    local isMouseMove = input.UserInputType == Enum.UserInputType.MouseMovement
+    local isTouchMove = input.UserInputType == Enum.UserInputType.Touch
+    if not isMouseMove and not isTouchMove then return end
+    local pointer = Vector2.new(input.Position.X, input.Position.Y)
+    local delta = pointer - launcherStartPointer
+    if delta.Magnitude >= 6 then launcherDidMove = true end
+    if launcherDidMove then
+        launcherPosition = clampLauncherPosition(launcherStartPosition + delta, camera.ViewportSize)
+        launcherUserMoved = true
+        toolbar.Position = UDim2.fromOffset(launcherPosition.X, launcherPosition.Y)
+    end
+end)
+connectTracked(UserInputService.InputEnded, function(input)
+    if not launcherDragging then return end
+    local released = input.UserInputType == Enum.UserInputType.MouseButton1
+        or input == launcherStartInput
+        or (launcherStartInput and launcherStartInput.UserInputType == Enum.UserInputType.Touch and input.UserInputType == Enum.UserInputType.Touch)
+    if not released then return end
+    local shouldOpen = not launcherDidMove
+    launcherDragging = false
+    launcherStartInput = nil
+    launcherStartPointer = nil
+    launcherStartPosition = nil
+    launcherDidMove = false
+    if shouldOpen and floatToggle.Visible and not state.Playing and not state.Finishing then
+        main.Visible = true
+        background.Visible = true
+        floatToggle.Visible = false
+        playSFX("BGM")
+    end
+end)
+
+floatBGM.MouseButton1Click:Connect(function()
+    local setter = toggleSetters.BGM
+    if setter then setter(not CONFIG.BGMEnabled) end
+end)
+floatSFX.MouseButton1Click:Connect(function()
+    local setter = toggleSetters.SFX
+    if setter then setter(not CONFIG.SFXEnabled) end
+end)
+
+showPage("Play")
+layoutPlayPage()
+checkAchievements()
+refreshLeaderboard()
+playSFX("BGM")
+print("[Dungdx Aim Trainer v11.0 - NEXUS ULTIMATE] Loaded successfully!")
+]==]
+
+    local AimTrainer = {
+        active = false,
+        loading = false,
+        lastError = nil,
+        injectedGuis = {},     -- ScreenGui mới phát hiện sau khi load
+        injectedSounds = {},   -- Sound mới phát hiện sau khi load
+    }
+
+    -- ─── Snapshot / detect GUI ───
+    local function collectGuiRoots()
+        local roots = {}
+        pcall(function()
+            local pg = LP:FindFirstChildOfClass("PlayerGui")
+            if pg then table.insert(roots, pg) end
+        end)
+        pcall(function() table.insert(roots, game:GetService("CoreGui")) end)
+        if type(gethui) == "function" then
+            pcall(function()
+                local h = gethui()
+                if h then table.insert(roots, h) end
+            end)
+        end
+        return roots
+    end
+
+    local function snapshotGuis()
+        local set = {}
+        for _, root in ipairs(collectGuiRoots()) do
+            pcall(function()
+                for _, d in ipairs(root:GetDescendants()) do
+                    if d:IsA("ScreenGui") then set[d] = true end
+                end
+            end)
+        end
+        return set
+    end
+
+    local function detectNewGuis(baseline)
+        local list = {}
+        for _, root in ipairs(collectGuiRoots()) do
+            pcall(function()
+                for _, d in ipairs(root:GetDescendants()) do
+                    if d:IsA("ScreenGui") and not baseline[d] then
+                        table.insert(list, d)
+                    end
+                end
+            end)
+        end
+        return list
+    end
+
+    -- ─── Snapshot / detect Sound ───
+    local function snapshotSounds()
+        local set = {}
+        pcall(function()
+            local ss = game:GetService("SoundService")
+            for _, s in ipairs(ss:GetDescendants()) do
+                if s:IsA("Sound") then set[s] = true end
+            end
+        end)
+        return set
+    end
+
+    local function detectNewSounds(baseline)
+        local list = {}
+        pcall(function()
+            local ss = game:GetService("SoundService")
+            for _, s in ipairs(ss:GetDescendants()) do
+                if s:IsA("Sound") and not baseline[s] then
+                    table.insert(list, s)
+                end
+            end
+        end)
+        return list
+    end
+
+    -- ─── Load ───
+    local function loadAimTrainer()
+        if AimTrainer.active then return true end
+        if AimTrainer.loading then return false, "Đang load..." end
+        if type(loadstring) ~= "function" then
+            return false, "Executor thiếu loadstring"
+        end
+        local src = AIM_TRAINER_SOURCE
+        if type(src) ~= "string" or #src < 50 then
+            return false, "Chưa dán code Aim Trainer vào AIM_TRAINER_SOURCE"
+        end
+        if src:find("DÁN TOÀN BỘ CODE Aim Trainer", 1, true) then
+            return false, "Bạn chưa thay placeholder bằng code thật"
+        end
+
+        AimTrainer.loading = true
+        AimTrainer.lastError = nil
+
+        local guiBaseline = snapshotGuis()
+        local soundBaseline = snapshotSounds()
+
+        local fn, compileErr
+        local okCompile = pcall(function()
+            fn = loadstring(src, "@Dungdx_AimTrainer_Embedded")
+        end)
+        if not okCompile or type(fn) ~= "function" then
+            AimTrainer.loading = false
+            AimTrainer.lastError = "Compile lỗi: " .. tostring(compileErr or "nil")
+            return false, AimTrainer.lastError
+        end
+
+        local okRun, runErr = pcall(fn)
+        if not okRun then
+            AimTrainer.loading = false
+            AimTrainer.lastError = "Runtime lỗi: " .. tostring(runErr):sub(1, 180)
+            return false, AimTrainer.lastError
+        end
+
+        -- Chờ 1 nhịp cho script con defer-tạo GUI
+        task.wait(0.35)
+
+        AimTrainer.injectedGuis = detectNewGuis(guiBaseline)
+        AimTrainer.injectedSounds = detectNewSounds(soundBaseline)
+        AimTrainer.loading = false
+        AimTrainer.active = true
+        return true
+    end
+
+    -- ─── Unload ───
+    local function unloadAimTrainer()
+        if not AimTrainer.active and not AimTrainer.loading then
+            return true
+        end
+
+        -- 1. Hook destroy nếu Aim Trainer tự đăng ký (dọn connection ẩn, v.v.)
+        pcall(function()
+            if type(_G.DungdxAimTrainerDestroy) == "function" then
+                _G.DungdxAimTrainerDestroy()
+            end
+        end)
+        task.wait(0.08)
+
+        -- 2. Gỡ ScreenGui Aim Trainer đã tạo
+        for _, g in ipairs(AimTrainer.injectedGuis) do
+            if g and g.Parent then
+                pcall(function() g:Destroy() end)
+            end
+        end
+
+        -- 3. Gỡ Sound Aim Trainer đã tạo
+        for _, s in ipairs(AimTrainer.injectedSounds) do
+            if s and s.Parent then
+                pcall(function()
+                    s:Stop()
+                    s:Destroy()
+                end)
+            end
+        end
+
+        AimTrainer.injectedGuis = {}
+        AimTrainer.injectedSounds = {}
+        AimTrainer.active = false
+        AimTrainer.loading = false
+        return true
+    end
+
+    -- ─── UI ───
+    local eAim = mSec(extendPage, "🎯 Aim Trainer Nexus Ultimate v11",
+        "Bật = chạy · Tắt = gỡ sạch khỏi Extend (script chính vẫn sống)", 18)
+
+    local aimStatusRow = mRow(eAim, 1)
+    aimStatusRow.Size = UDim2.new(1, 0, 0, 56)
+
+    local aimStatusLbl = Instance.new("TextLabel", aimStatusRow)
+    aimStatusLbl.Size = UDim2.new(1, -24, 0, 20)
+    aimStatusLbl.Position = UDim2.fromOffset(12, 6)
+    aimStatusLbl.BackgroundTransparency = 1
+    aimStatusLbl.Text = "Trạng thái: Tắt"
+    aimStatusLbl.Font = Enum.Font.GothamBold
+    aimStatusLbl.TextSize = 12
+    aimStatusLbl.TextColor3 = T.Sub
+    aimStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local aimStatusSub = Instance.new("TextLabel", aimStatusRow)
+    aimStatusSub.Size = UDim2.new(1, -24, 0, 16)
+    aimStatusSub.Position = UDim2.fromOffset(12, 30)
+    aimStatusSub.BackgroundTransparency = 1
+    aimStatusSub.Text = "Bật để chạy · Tắt để gỡ hoàn toàn"
+    aimStatusSub.Font = Enum.Font.Gotham
+    aimStatusSub.TextSize = 10
+    aimStatusSub.TextColor3 = T.Sub
+    aimStatusSub.TextXAlignment = Enum.TextXAlignment.Left
+    aimStatusSub.TextWrapped = true
+
+    local aimToggleRef
+    aimToggleRef = mTog(eAim, "Bật Aim Trainer",
+        "Toggle điều khiển trọn vòng đời Aim Trainer", false, 2, function(v)
+        if v then
+            aimStatusLbl.Text = "Trạng thái: Đang load..."
+            aimStatusLbl.TextColor3 = T.Accent
+            aimStatusSub.Text = "Đang compile Aim Trainer..."
+            aimStatusSub.TextColor3 = T.Sub
+            task.spawn(function()
+                local ok, err = loadAimTrainer()
+                if not ok then
+                    aimStatusLbl.Text = "Lỗi: " .. tostring(err):sub(1, 90)
+                    aimStatusLbl.TextColor3 = T.Danger
+                    aimStatusSub.Text = "Không chạy được Aim Trainer"
+                    aimStatusSub.TextColor3 = T.Danger
+                    warn("[Dungdx AimTrainer] " .. tostring(err))
+                    task.defer(function()
+                        if aimToggleRef and aimToggleRef.Sync then
+                            aimToggleRef:Sync(false)
+                        end
+                    end)
+                    return
+                end
+                aimStatusLbl.Text = "Trạng thái: Đang chạy"
+                aimStatusLbl.TextColor3 = T.Green
+                aimStatusSub.Text = string.format(
+                    "Đã đăng ký gỡ %d GUI khi tắt lại",
+                    #AimTrainer.injectedGuis)
+                aimStatusSub.TextColor3 = T.Green
+            end)
+        else
+            aimStatusLbl.Text = "Trạng thái: Đang tắt..."
+            aimStatusLbl.TextColor3 = T.Accent
+            aimStatusSub.Text = "Đang gỡ Aim Trainer khỏi phiên chơi..."
+            aimStatusSub.TextColor3 = T.Sub
+            task.spawn(function()
+                local ok, err = unloadAimTrainer()
+                if not ok then
+                    aimStatusLbl.Text = "Lỗi khi tắt: " .. tostring(err):sub(1, 80)
+                    aimStatusLbl.TextColor3 = T.Danger
+                    aimStatusSub.Text = "Một số thành phần có thể còn sót lại"
+                    aimStatusSub.TextColor3 = T.Danger
+                    return
+                end
+                aimStatusLbl.Text = "Trạng thái: Tắt"
+                aimStatusLbl.TextColor3 = T.Sub
+                aimStatusSub.Text = "Đã gỡ hoàn toàn · Bật lại để chạy lại"
+                aimStatusSub.TextColor3 = T.Sub
+            end)
+        end
+    end)
+
+    mBtn(eAim, "🔄 Chạy lại từ đầu",
+        "Tắt sạch rồi bật lại Aim Trainer (dùng khi GUI bị lỗi)", "Reload", 3, function()
+        if AimTrainer.loading then return end
+        aimStatusLbl.Text = "Trạng thái: Đang reload..."
+        aimStatusLbl.TextColor3 = T.Accent
+        task.spawn(function()
+            unloadAimTrainer()
+            task.wait(0.15)
+            local ok, err = loadAimTrainer()
+            if not ok then
+                aimStatusLbl.Text = "Lỗi reload: " .. tostring(err):sub(1, 80)
+                aimStatusLbl.TextColor3 = T.Danger
+                aimStatusSub.TextColor3 = T.Danger
+                if aimToggleRef and aimToggleRef.Sync then aimToggleRef:Sync(false) end
+                return
+            end
+            aimStatusLbl.Text = "Trạng thái: Đang chạy (reload)"
+            aimStatusLbl.TextColor3 = T.Green
+            aimStatusSub.Text = "Reload thành công"
+            aimStatusSub.TextColor3 = T.Green
+            if aimToggleRef and aimToggleRef.Sync then aimToggleRef:Sync(true) end
+        end)
+    end)
+
+    -- Để script chính gọi unload khi Destroy
+    FeatureControl.aimTrainerUnload = unloadAimTrainer
+
+ -- Auto reset khi respawn
  -- Auto reset khi respawn
     trackPersistent(LP.CharacterAdded:Connect(function()
         task.wait(0.5)
