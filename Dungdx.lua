@@ -10649,7 +10649,4683 @@ print("[Dungdx Aim Trainer v11.0 - NEXUS ULTIMATE] Loaded successfully!")
 
     -- Để script chính gọi unload khi Destroy
     FeatureControl.aimTrainerUnload = unloadAimTrainer
+    -- ═══════════════ 🎵 MUSIC PLAYER — TOGGLE ĐIỀU KHIỂN TRỌN VÒNG ĐỜI ═══════════════
+    local MUSIC_PLAYER_SOURCE = [==[
+--[[
+DUNGDX MUSIC PLAYER - UI 7.4 · GLASS MOTION + PERFORMANCE
+Full/Mini/Dynamic UI with client-side Sound playback, volume/seek, playlist navigation and loading feedback.
+Audio playback depends on the audio asset being valid and permitted for the running Roblox experience.
+- Reconstructed as three separate layouts: Full, Mini, Background.
+- Track rows show title + Roblox audio ID only (no artist/author).
+- Demo entries exist only to preview layout and thumbnails. The Mini genre filter is independent of Full navigation.
+- Music volume controls the dedicated Sound object. Game audio volume scales other local Sound instances separately.
+- Restore toggle resolves avatar headshot 91434453184512, with a raw image-asset fallback; the vinyl indicator spins only while real playback is active.
+- Vector icons are clipped to their own canvases so diagonal strokes cannot overlap nearby labels.
+- Save/load prefers executor readfile/writefile JSON storage, with a PlayerGui session-only fallback.
+- v6.0: virtualized song lists, lean playback refreshes, draggable floating controls, and resize support.
+- v6.1: refined visual hierarchy, theme-aware gradients, balanced row surfaces, improved spacing, and premium borders.
+- v7.3: premium glass shells, layered cover art, animated button feedback, modal polish, and lower-cost background decor.
+- v7.4: edge dragging, multi-corner resizing, shorter motion, cached RGB bindings, and visibility-aware visualizers.
+Run as a LocalScript in StarterPlayerScripts.
+]]
 
+local UI = {
+    vinylRoots = {}, vinylTweens = {}, playingDiscBadges = {}, transparencyBindings = {},
+    circularWaveBars = {}, waveArtworkRoots = {}, waveArtworkTweens = {},
+    wavePulseRings = {}, trackMiniWaveBars = {}, iconColorBindings = {},
+}
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local ContentProvider = game:GetService("ContentProvider")
+local HttpService = game:GetService("HttpService")
+local SoundService = game:GetService("SoundService")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+if not player then
+    warn("DUNGDX Music Player UI must run on the client.")
+    return
+end
+
+local playerGui = player:WaitForChild("PlayerGui")
+local GUI_NAME = "DungdxMusicPlayerUI"
+local CONFIG_ATTRIBUTE = "DGMusicPlayer_Config_v1"
+local SAVE_FILE = "DungdxMusicPlayer_Config_v7.json"
+local SAVE_BACKUP_FILE = "DungdxMusicPlayer_Config_v7.backup.json"
+local oldGui = playerGui:FindFirstChild(GUI_NAME)
+if oldGui then oldGui:Destroy() end
+for _, stale in ipairs(SoundService:GetChildren()) do
+    if stale:IsA("Sound") and stale.Name == "DGMusicPlayer_ClientTrack" then
+        pcall(function() stale:Stop() end)
+        stale:Destroy()
+    end
+end
+
+local COLORS = {
+    Aurora = {
+        bg = Color3.fromRGB(3, 7, 25), panel = Color3.fromRGB(5, 10, 31), deep = Color3.fromRGB(3, 7, 24),
+        surface = Color3.fromRGB(10, 16, 43), border = Color3.fromRGB(35, 43, 94), selected = Color3.fromRGB(34, 9, 67),
+        accent = Color3.fromRGB(218, 44, 255), accent2 = Color3.fromRGB(22, 222, 255),
+        text = Color3.fromRGB(239, 243, 255), muted = Color3.fromRGB(139, 153, 193), danger = Color3.fromRGB(255, 91, 134),
+    },
+    Violet = {
+        bg = Color3.fromRGB(7, 4, 24), panel = Color3.fromRGB(14, 8, 37), deep = Color3.fromRGB(6, 4, 23),
+        surface = Color3.fromRGB(25, 14, 55), border = Color3.fromRGB(64, 39, 119), selected = Color3.fromRGB(39, 13, 77),
+        accent = Color3.fromRGB(178, 68, 255), accent2 = Color3.fromRGB(78, 130, 255),
+        text = Color3.fromRGB(245, 241, 255), muted = Color3.fromRGB(164, 148, 201), danger = Color3.fromRGB(255, 91, 134),
+    },
+    Rose = {
+        bg = Color3.fromRGB(22, 5, 25), panel = Color3.fromRGB(36, 8, 40), deep = Color3.fromRGB(17, 4, 23),
+        surface = Color3.fromRGB(54, 13, 59), border = Color3.fromRGB(101, 35, 108), selected = Color3.fromRGB(66, 12, 69),
+        accent = Color3.fromRGB(255, 61, 183), accent2 = Color3.fromRGB(144, 97, 255),
+        text = Color3.fromRGB(255, 239, 251), muted = Color3.fromRGB(194, 147, 188), danger = Color3.fromRGB(255, 91, 134),
+    },
+    Ember = {
+        bg = Color3.fromRGB(24, 10, 8), panel = Color3.fromRGB(37, 16, 13), deep = Color3.fromRGB(17, 7, 6),
+        surface = Color3.fromRGB(56, 25, 18), border = Color3.fromRGB(103, 51, 34), selected = Color3.fromRGB(66, 23, 19),
+        accent = Color3.fromRGB(255, 131, 68), accent2 = Color3.fromRGB(255, 73, 155),
+        text = Color3.fromRGB(255, 242, 232), muted = Color3.fromRGB(197, 156, 135), danger = Color3.fromRGB(255, 91, 134),
+    },
+}
+
+local GENRES = { "V-Pop", "Rap / Hip-hop", "EDM", "Lofi", "Remix", "Khác" }
+local GENRE_COLORS = {
+    ["V-Pop"] = Color3.fromRGB(255, 66, 192),
+    ["Rap / Hip-hop"] = Color3.fromRGB(255, 143, 71),
+    EDM = Color3.fromRGB(28, 218, 255),
+    Lofi = Color3.fromRGB(175, 73, 255),
+    Remix = Color3.fromRGB(28, 218, 255),
+    ["Khác"] = Color3.fromRGB(119, 151, 255),
+}
+local COVER_PAIRS = {
+    { Color3.fromRGB(218, 18, 80), Color3.fromRGB(82, 33, 99) },
+    { Color3.fromRGB(229, 22, 121), Color3.fromRGB(255, 69, 94) },
+    { Color3.fromRGB(62, 49, 255), Color3.fromRGB(22, 117, 255) },
+    { Color3.fromRGB(16, 174, 176), Color3.fromRGB(38, 57, 93) },
+    { Color3.fromRGB(255, 93, 36), Color3.fromRGB(193, 27, 74) },
+    { Color3.fromRGB(104, 37, 255), Color3.fromRGB(33, 57, 255) },
+    { Color3.fromRGB(235, 32, 97), Color3.fromRGB(78, 36, 125) },
+    { Color3.fromRGB(242, 38, 82), Color3.fromRGB(81, 35, 155) },
+}
+
+-- Built-in library metadata. Sound playback uses each selected track's numeric audio ID.
+-- Each entry can be moved to any of the six genres from the row menu.
+-- Duplicate ID 82712037306527 was kept once ("Có Ý Gì"); same asset was also listed as "Bài Hát Không Tên".
+local tracks = {
+    { Id = "110919391228823", Title = "Ai Đưa Em Về", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "103475172398501", Title = "Anh Cứ Đi Đi", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "92261177284503", Title = "Bản Tình Ca Của Mưa", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "113256789261620", Title = "Chiếc Xe Đạp", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "127667093795280", Title = "Chạy Về Với Anh", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "136455447736344", Title = "Chỉ Còn Lại Mùa Thu", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "82712037306527", Title = "Có Ý Gì", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "1845920732", Title = "Cô Bé", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "78637315480540", Title = "Em Ở Đâu", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "137760528578157", Title = "Em Vẫn Ở Lại Trong Anh", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "95067942506090", Title = "Gã Lữ Hành Mơ", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "1845920320", Title = "Hè Mới", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "98361989582185", Title = "Khuê Mộc Lan", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "139318501029364", Title = "Lạc Giữa Mây Trời", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "116260601379194", Title = "Lạc Chốn Hồng Trần", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "102213105568131", Title = "Lạc Trong Mưa Vĩnh Hằng", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "118574601343022", Title = "Mất Anh Rồi", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "83184069384585", Title = "Một Ngày Mới", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "82627558368623", Title = "Mưa Đợi Chờ", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "97541911829419", Title = "Người Đi Trong Cơn Mưa", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "114580872442958", Title = "Người Đến Sau", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "97589367954366", Title = "Người Đuổi Theo Giấc Mơ", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "88813570339536", Title = "Ngày Em Đẹp Nhất", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "123172975095332", Title = "Nhà", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "78280324536766", Title = "Nhớ Em Suốt Ngày Lẫn Đêm", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "128142426694278", Title = "Nước Quên Tình", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "121242950842428", Title = "See Tình", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "113675312413032", Title = "Thế Gian Xoay Vòng - Không Thời Gian", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "133528836550065", Title = "Tình Chỉ Là Giấc Mơ", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "140553267266985", Title = "Trái Đất Yêu Mặt Trời & Nắng Có Mang Em Về", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "130023951205264", Title = "Tưng Bừng Phố Xá", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "83206244192113", Title = "Vì Anh Lỡ Yêu Em", Duration = 0, Genre = "V-Pop", Favorite = false, Demo = false },
+    { Id = "94035074626747", Title = "CMW-2008 EIKAYY", Duration = 0, Genre = "Rap / Hip-hop", Favorite = false, Demo = false },
+    { Id = "8232702830", Title = "Này Thằng Trẻ Trâu", Duration = 0, Genre = "Rap / Hip-hop", Favorite = false, Demo = false },
+    { Id = "130356649001216", Title = "One Love For Vietnam - Hiphop", Duration = 0, Genre = "Rap / Hip-hop", Favorite = false, Demo = false },
+    { Id = "108477308631109", Title = "Vạn Vật Thay Đổi, Vật Chất Lên Ngôi", Duration = 0, Genre = "Rap / Hip-hop", Favorite = false, Demo = false },
+    { Id = "89965851084527", Title = "Cô Độc Vương & Gió Nổi Lên (EDM Ver)", Duration = 0, Genre = "EDM", Favorite = false, Demo = false },
+    { Id = "103038059531764", Title = "DJ Cố Giang Tình", Duration = 0, Genre = "EDM", Favorite = false, Demo = false },
+    { Id = "80415307715259", Title = "DJ Hối Hận Trong Anh", Duration = 0, Genre = "EDM", Favorite = false, Demo = false },
+    { Id = "90485518961668", Title = "Nhạc Lên Là Cháy Lên", Duration = 0, Genre = "EDM", Favorite = false, Demo = false },
+    { Id = "92330846497353", Title = "Vietnam War the Beat", Duration = 0, Genre = "EDM", Favorite = false, Demo = false },
+    { Id = "129361584564255", Title = "Lo-fi Vietnam Christmas", Duration = 0, Genre = "Lofi", Favorite = false, Demo = false },
+    { Id = "121051113937228", Title = "Chỉ Còn Là Giấc Mơ Remix", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "119526323504077", Title = "Chuyện Nàng Trinh Nữ Tên Thi Remix", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "100551543792666", Title = "Chữ Nghĩa Chữ Tiền Remix", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "71716020610625", Title = "Cùng Anh Remix", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "73423580532746", Title = "Cứ Thế Mong Chờ Remix", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "77236177769060", Title = "ID Music Roblox Remix Cực Chất", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "139561041840996", Title = "ID Nhạc Roblox Remix Việt Nam", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "95300067259927", Title = "Katy Katy Remix", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "124166975687737", Title = "Mimimi Remix", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "109743636792463", Title = "Phía Sau Một Cô Gái Remix", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "107810773290624", Title = "Phố Cũ Còn Anh Remix", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "110404768256690", Title = "Remix Anh Là CMN Địch", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "119442761639432", Title = "Remix Nhạc Việt Hay", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "90113853563664", Title = "Sóng Và Gió Remix", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "139747933972576", Title = "Tinh Vệ Remix", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "78534559289195", Title = "2 Phút Hơn", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "110396752508363", Title = "Trả Lại Cho Anh Remix", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "139968910103444", Title = "Tuyển Vợ Remix", Duration = 0, Genre = "Remix", Favorite = false, Demo = false },
+    { Id = "1845922899", Title = "Quốc ca Việt Nam (National Anthem)", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "127806697222274", Title = "Chung Lòng Sắc Son Việt Nam", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "140401965136591", Title = "Đi Để Thêm Yêu Việt Nam", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "133689230780877", Title = "Đi Về Nhà", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "96512039117009", Title = "Giữ Mãi Màu Cờ Việt Nam", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "100697316846246", Title = "Hoàng Sa Trường Sa - Việt Nam Tôi", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "74747093576085", Title = "Nước Việt Nam Là Một", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "139850797061032", Title = "One Love For Vietnam (Bản gốc)", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "91909308514647", Title = "Phụ Nữ Việt Nam Xinh Đẹp", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "86332235482487", Title = "Spirit of Vietnam", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "132906531843072", Title = "Thánh Gióng Việt Nam", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "71483290985844", Title = "Tôi Là Người Việt Nam", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "71049729424973", Title = "Việt Nam - Mưa Đỏ", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "135890025267683", Title = "Việt Nam Độc Lập Tự Do Hạnh Phúc", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "122163236660026", Title = "Việt Nam Ngàn Đời (Bonus)", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "98893986207534", Title = "Việt Nam Vươn Tầm Cao Mới", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "126734145079676", Title = "Yêu Sao Việt Nam (Love Vietnam)", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1842487830", Title = "Ca Trù", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1842487677", Title = "Ca Tru Instrumental Phrases", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1845920364", Title = "Cơ Bản Dựng B", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1837165505", Title = "Dân Ca Đồng Tháp", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1845902397", Title = "Dân Ca Nam Bộ", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1845902516", Title = "Đàn Tranh", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1842487849", Title = "H'mong Theme", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1842487783", Title = "Khách Danh Dự (a)", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "18459020460", Title = "Lý Ngựa Ô", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "18459020446", Title = "Lý Ngựa Ô B", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1842487414", Title = "Ngâm Thơ", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1845902410", Title = "Nhạc Chèo Buồn", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1845920382", Title = "Phụ Lục", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1845902473", Title = "Qua Cầu Gió Bay", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1845902590", Title = "Ru Em", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "18459020271", Title = "Sa Lếch Chênh B", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1845902117", Title = "Sáo H'Mông", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1845902290", Title = "Sáo Ngang 3", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1845902347", Title = "Sáo Ngang 4", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "18459020608", Title = "Tàu Mã", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1845920859", Title = "Trống Mặt Da", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "18459020395", Title = "Tứ Đại Cảnh", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1842487705", Title = "Tung Khang Maenam", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "18459020580", Title = "Xàng Xê", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "91257780878191", Title = "25 Năm Twist Twist Twist", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "113001792227715", Title = "50 Năm Cha Cha Cha", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "93716495133976", Title = "Cảm Ơn Em (Vietnam) I Thank You", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1842489128", Title = "Dreams Of Da Nang", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1842492458", Title = "Dreams Of Da Nang", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1842488648", Title = "Lost In Saigon", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "101397915632801", Title = "Viaggio In Vietnam", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "137379892470554", Title = "Vietnam", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "1837179071", Title = "Việt Trì", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "9112741899", Title = "Army Camp Vietnam 2 (SFX)", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "18459020681", Title = "Đám Ma", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "8295016126", Title = "Good Morning Vietnam! Sound", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "2602546138", Title = "Hitsound Chửi Bậy", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "80354392743323", Title = "Lung Linh Đèn Lồng", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "95107770292968", Title = "Lung Linh Sắc Xuân", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "123228064843261", Title = "Vietnam Railroad Crossing Bell", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "7225461356", Title = "Vietnam War Radio Chatter - Brief", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+    { Id = "2745270351", Title = "[TikTok] Kêu quá trời mà k ra mở...", Duration = 0, Genre = "Khác", Favorite = false, Demo = false },
+}
+
+
+local state = {
+    theme = "Aurora",
+    mode = "Full",
+    page = "All",
+    genre = nil,
+    selectedId = "78534559289195",
+    recent = { "78534559289195", "121242950842428", "110919391228823" },
+    musicVolume = 70,
+    gameVolume = 100,
+    progress = 0,
+    playing = false,
+    shuffle = false,
+    repeatOn = false,
+    fullQuery = "",
+    miniQuery = "",
+    miniGenre = nil,
+    scales = { Full = 1, Mini = 1, Background = 1 },
+    positions = {},
+    deletedIds = {},
+    motion = true, -- controls optional artwork rotation while audio is actively playing
+    visualizerStyle = "Vinyl", -- "Vinyl" or "Wave"
+    rgbEnabled = true,
+    rgbSpeed = 0.45,
+    rgbBrightness = 0.75,
+    uiTransparency = 0,
+    uiHidden = false,
+}
+local palette = COLORS[state.theme]
+local themeBindings = {}
+local rgbThemeBindings = {} -- Cached accent-only theme bindings; avoids scanning every UI object per RGB tick.
+local accentGradients = {}
+local themeGradients = {}
+local rgbThemeGradients = {} -- Only gradients that actually reference accent/accent2.
+local controls = {}
+local scheduleAutoSave -- forward-declared so every control callback uses the same local function
+local dragOperation = nil
+UI.contextTarget = nil
+UI.modalTarget = nil
+UI.modalKind = nil
+local savedGameVolumes = {}
+local soundConnections = {}
+local soundVolumeGuard = {}
+local guiAlive = true
+
+-- Real client-side music playback state. The prefix keeps the music Sound out of game-volume scaling.
+local musicSound = nil
+local musicSoundId = nil
+local playbackGeneration = 0
+local playbackConnections = {}
+local playbackStatus = "Stopped"
+local playbackHeartbeat = nil
+local playTrack
+
+-- True only after Roblox confirms the Sound is actually playing.
+local function isPlaybackActive()
+    return state.playing == true
+        and playbackStatus == "Playing"
+        and musicSound ~= nil
+        and musicSound.Parent ~= nil
+        and musicSound.IsPlaying == true
+end
+local moveSelection
+local advancePlayback
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = GUI_NAME
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.DisplayOrder = 45
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = playerGui
+
+local transparencyRecords = setmetatable({}, { __mode = "k" })
+local function applyUITransparency()
+    local amount = math.clamp(tonumber(state.uiTransparency) or 0, 0, 0.8)
+    for i = #UI.transparencyBindings, 1, -1 do
+        local record = UI.transparencyBindings[i]
+        local object = record and record.object
+        if not object or not object.Parent then
+            table.remove(UI.transparencyBindings, i)
+        else
+            pcall(function()
+                object.BackgroundTransparency = math.clamp(record.base + amount * (1 - record.base), 0, 1)
+            end)
+        end
+    end
+end
+
+local function registerTheme(obj, property, role)
+    if palette[role] then obj[property] = palette[role] end
+    local binding = { object = obj, property = property, role = role }
+    table.insert(themeBindings, binding)
+    if role == "accent" or role == "accent2" then table.insert(rgbThemeBindings, binding) end
+    if property == "BackgroundColor3" and obj:IsA("GuiObject") and not transparencyRecords[obj] then
+        local base = obj.BackgroundTransparency
+        if base < 0.995 then
+            transparencyRecords[obj] = true
+            table.insert(UI.transparencyBindings, { object = obj, base = base })
+            if (state.uiTransparency or 0) > 0 then
+                obj.BackgroundTransparency = base + state.uiTransparency * (1 - base)
+            end
+        end
+    end
+    return obj
+end
+
+
+local function make(className, parent, props)
+    local obj = Instance.new(className)
+    for key, value in pairs(props or {}) do
+        obj[key] = value
+    end
+    obj.Parent = parent
+    return obj
+end
+
+-- Theme-aware gradients make surfaces feel layered without adding image assets or heavy effects.
+local function addRoleGradient(obj, fromRole, toRole, rotation)
+    if not obj or not obj.Parent then return nil end
+    local gradient = make("UIGradient", obj, {
+        Name = "DGThemeSurfaceGradient",
+        Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, palette[fromRole] or palette.bg),
+            ColorSequenceKeypoint.new(1, palette[toRole] or palette.panel),
+        }),
+        Rotation = rotation or 0,
+    })
+    local record = { gradient = gradient, fromRole = fromRole, toRole = toRole, rotation = rotation or 0 }
+    table.insert(themeGradients, record)
+    if fromRole == "accent" or fromRole == "accent2" or toRole == "accent" or toRole == "accent2" then
+        table.insert(rgbThemeGradients, record)
+    end
+    return gradient
+end
+
+local function addCorner(obj, radius)
+    local corner = obj:FindFirstChildOfClass("UICorner")
+    if corner then
+        corner.CornerRadius = UDim.new(0, radius or 8)
+        return corner
+    end
+    return make("UICorner", obj, { CornerRadius = UDim.new(0, radius or 8) })
+end
+
+-- ⭐ UPGRADE: BackgroundDecoration — a capped dot field keeps the backdrop textured
+-- without creating the 540 objects required by a literal 30x18 grid.
+UI.backgroundDecoration = make("Frame", screenGui, {
+    Name = "BackgroundDecoration", Position = UDim2.fromScale(0, 0), Size = UDim2.fromScale(1, 1),
+    BackgroundTransparency = 1, BorderSizePixel = 0, Active = false, ZIndex = 1,
+})
+do
+    local camera = Workspace.CurrentCamera
+    local viewport = camera and camera.ViewportSize or Vector2.new(1280, 720)
+    local columns = math.clamp(math.floor(viewport.X / 160), 6, 7)
+    local rows = 4
+    for r = 1, rows do
+        for c = 1, columns do
+            local dot = make("Frame", UI.backgroundDecoration, {
+                Name = "AmbientDot", AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.fromScale(c / (columns + 1), r / (rows + 1)),
+                Size = UDim2.fromOffset(2, 2), BackgroundColor3 = palette.accent,
+                BackgroundTransparency = 0.91, BorderSizePixel = 0, Active = false, ZIndex = 1,
+            })
+            addCorner(dot, 1)
+            registerTheme(dot, "BackgroundColor3", "accent")
+        end
+    end
+end
+
+
+local function addStroke(obj, color, thickness, transparency, gradientAccent)
+    local stroke = make("UIStroke", obj, {
+        Color = color or palette.border,
+        Thickness = thickness or 1,
+        Transparency = transparency or 0,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    })
+    if gradientAccent then
+        local gradient = make("UIGradient", stroke, {
+            Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, palette.accent),
+                ColorSequenceKeypoint.new(0.54, Color3.fromRGB(112, 74, 255)),
+                ColorSequenceKeypoint.new(1, palette.accent2),
+            }),
+            Rotation = 0,
+        })
+        table.insert(accentGradients, gradient)
+    end
+    return stroke
+end
+
+local function label(parent, text, size, colorRole, pos, dimensions, opts)
+    opts = opts or {}
+    local obj = make("TextLabel", parent, {
+        Name = opts.name or "Text",
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Position = pos or UDim2.new(),
+        Size = dimensions or UDim2.fromOffset(100, 20),
+        Font = opts.font or Enum.Font.Gotham,
+        Text = text or "",
+        TextSize = size or 10,
+        TextColor3 = palette[colorRole or "text"] or palette.text,
+        TextXAlignment = opts.align or Enum.TextXAlignment.Left,
+        TextYAlignment = opts.yAlign or Enum.TextYAlignment.Center,
+        TextWrapped = opts.wrapped or false,
+        TextTruncate = opts.truncate and Enum.TextTruncate.AtEnd or Enum.TextTruncate.None,
+        RichText = false,
+        Active = false,
+        ZIndex = opts.z or 12,
+    })
+    if colorRole and palette[colorRole] then registerTheme(obj, "TextColor3", colorRole) end
+    -- ⭐ UPGRADE: TypographyShadow — optional one-pixel depth for key headings.
+    if opts.shadow then
+        local shadow = make("TextLabel", parent, {
+            Name = (opts.name or "Text") .. "Shadow", BackgroundTransparency = 1, BorderSizePixel = 0,
+            Position = UDim2.new((pos or UDim2.new()).X.Scale, (pos or UDim2.new()).X.Offset,
+                (pos or UDim2.new()).Y.Scale, (pos or UDim2.new()).Y.Offset + 1),
+            Size = dimensions or UDim2.fromOffset(100, 20), Font = opts.font or Enum.Font.Gotham,
+            Text = text or "", TextSize = size or 10, TextColor3 = Color3.new(0, 0, 0),
+            TextTransparency = 0.42, TextXAlignment = opts.align or Enum.TextXAlignment.Left,
+            TextYAlignment = opts.yAlign or Enum.TextYAlignment.Center, TextWrapped = opts.wrapped or false,
+            TextTruncate = opts.truncate and Enum.TextTruncate.AtEnd or Enum.TextTruncate.None,
+            RichText = false, Active = false, ZIndex = math.max(1, (opts.z or 12) - 1),
+        })
+        shadow:SetAttribute("DGTypographyShadow", true)
+        local function syncShadow()
+            if not shadow.Parent or not obj.Parent then return end
+            shadow.Text = obj.Text
+            shadow.TextSize = obj.TextSize
+            shadow.Font = obj.Font
+            shadow.TextWrapped = obj.TextWrapped
+            shadow.TextTruncate = obj.TextTruncate
+            shadow.TextXAlignment = obj.TextXAlignment
+            shadow.TextYAlignment = obj.TextYAlignment
+            shadow.Size = obj.Size
+            shadow.Position = UDim2.new(obj.Position.X.Scale, obj.Position.X.Offset,
+                obj.Position.Y.Scale, obj.Position.Y.Offset + 1)
+        end
+        for _, property in ipairs({ "Text", "TextSize", "Font", "TextWrapped", "TextTruncate", "TextXAlignment", "TextYAlignment", "Size", "Position" }) do
+            obj:GetPropertyChangedSignal(property):Connect(syncShadow)
+        end
+    end
+    return obj
+end
+
+-- ⭐ UPGRADE: addRipple — touch/mouse feedback made from native GUI geometry only.
+local function addRipple(btn, input)
+    if not btn or not btn.Parent then return end
+    local absoluteSize = btn.AbsoluteSize
+    local maxDimension = math.max(absoluteSize.X, absoluteSize.Y, 12)
+    local x, y = absoluteSize.X / 2, absoluteSize.Y / 2
+    if input and input.Position then
+        x = math.clamp(input.Position.X - btn.AbsolutePosition.X, 0, absoluteSize.X)
+        y = math.clamp(input.Position.Y - btn.AbsolutePosition.Y, 0, absoluteSize.Y)
+    end
+    local diameter = maxDimension * 2
+    local ripple = make("Frame", btn, {
+        Name = "DGRipple", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromOffset(x, y),
+        Size = UDim2.fromOffset(0, 0), BackgroundColor3 = palette.accent,
+        BackgroundTransparency = 0.42, BorderSizePixel = 0, Active = false,
+        ZIndex = btn.ZIndex + 5,
+    })
+    addCorner(ripple, math.ceil(diameter))
+    local gradient = make("UIGradient", ripple, {
+        Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, palette.accent), ColorSequenceKeypoint.new(1, palette.accent2) }),
+        Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(0.7, 0.45), NumberSequenceKeypoint.new(1, 1),
+        }), Rotation = 35,
+    })
+    table.insert(accentGradients, gradient)
+    local tween = TweenService:Create(ripple, TweenInfo.new(0.6, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+        Size = UDim2.fromOffset(diameter, diameter), BackgroundTransparency = 1,
+    })
+    tween.Completed:Connect(function()
+        if ripple and ripple.Parent then ripple:Destroy() end
+        for i = #accentGradients, 1, -1 do
+            if accentGradients[i] == gradient then
+                table.remove(accentGradients, i)
+                break
+            end
+        end
+    end)
+    tween:Play()
+end
+
+local function button(parent, text, pos, dimensions, opts)
+    opts = opts or {}
+    local obj = make("TextButton", parent, {
+        Name = opts.name or "Button",
+        Position = pos,
+        Size = dimensions,
+        BackgroundColor3 = palette[opts.bgRole or "surface"] or palette.surface,
+        BackgroundTransparency = opts.transparency == nil and 0 or opts.transparency,
+        BorderSizePixel = 0,
+        AutoButtonColor = false,
+        Text = text or "",
+        Font = opts.font or Enum.Font.Gotham,
+        TextSize = opts.textSize or 10,
+        TextColor3 = palette[opts.textRole or "text"] or palette.text,
+        TextWrapped = false,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        ZIndex = opts.z or 12,
+        Active = true,
+    })
+    if opts.corner ~= false then addCorner(obj, opts.radius or 7) end
+    local hoverStroke
+    local baseStrokeThickness, baseStrokeTransparency
+    if opts.stroke then
+        local strokeRole = opts.strokeRole or "border"
+        hoverStroke = addStroke(obj, palette[strokeRole], opts.strokeWidth or 1, opts.strokeTransparency or 0, opts.gradientStroke or false)
+        registerTheme(hoverStroke, "Color", strokeRole)
+        baseStrokeThickness = hoverStroke.Thickness
+        baseStrokeTransparency = hoverStroke.Transparency
+    end
+    if opts.bgRole then registerTheme(obj, "BackgroundColor3", opts.bgRole) end
+    if opts.textRole then registerTheme(obj, "TextColor3", opts.textRole) end
+    if opts.gradientFill and opts.bgRole then
+        -- ⭐ UPGRADE: ButtonDepthGradient — restrained surface-to-background shading.
+        addRoleGradient(obj, opts.bgRole, "bg", 90)
+    end
+
+    -- ⭐ UPGRADE: MicroAnimations — scale feedback does not alter layout geometry.
+    local motionScale
+    local scaleTween
+    if not opts.noMotion and opts.motionScale ~= false then
+        obj.ClipsDescendants = true
+        motionScale = make("UIScale", obj, { Name = "DGMicroScale", Scale = 1 })
+        local function animateScale(target, duration, style, direction)
+            if not motionScale or not motionScale.Parent then return end
+            if scaleTween then scaleTween:Cancel() end
+            scaleTween = TweenService:Create(motionScale, TweenInfo.new(duration, style, direction), { Scale = target })
+            scaleTween:Play()
+        end
+        obj.MouseEnter:Connect(function()
+            animateScale(1.04, 0.15, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        end)
+        obj.MouseLeave:Connect(function()
+            animateScale(1, 0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        end)
+        obj.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                animateScale(0.96, 0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+                if opts.ripple ~= false then addRipple(obj, input) end
+            end
+        end)
+        obj.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                animateScale(1, 0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+            end
+        end)
+    end
+
+    if not opts.noMotion and hoverStroke then
+        local strokeTween
+        local function animateStroke(transparency, thickness)
+            if not hoverStroke or not hoverStroke.Parent then return end
+            if strokeTween then strokeTween:Cancel() end
+            strokeTween = TweenService:Create(hoverStroke, TweenInfo.new(0.11, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                Transparency = transparency, Thickness = thickness,
+            })
+            strokeTween:Play()
+        end
+        obj.MouseEnter:Connect(function()
+            animateStroke(math.max(0, (baseStrokeTransparency or 0) - 0.12), (baseStrokeThickness or 1) + 0.15)
+        end)
+        obj.MouseLeave:Connect(function()
+            animateStroke(baseStrokeTransparency or 0, baseStrokeThickness or 1)
+        end)
+        obj.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                animateStroke(math.max(0, (baseStrokeTransparency or 0) - 0.18), (baseStrokeThickness or 1) + 0.25)
+            end
+        end)
+        obj.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                animateStroke(baseStrokeTransparency or 0, baseStrokeThickness or 1)
+            end
+        end)
+    end
+    obj.Activated:Connect(function()
+        if opts.onClick then opts.onClick(obj) end
+    end)
+    return obj
+end
+
+local function gradientFrame(parent, position, size, pair, radius, z)
+    local f = make("Frame", parent, {
+        Position = position, Size = size, BackgroundColor3 = pair and pair[1] or palette.accent,
+        BorderSizePixel = 0, ClipsDescendants = true, ZIndex = z or 13,
+    })
+    addCorner(f, radius or 9)
+    make("UIGradient", f, {
+        Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, pair and pair[1] or palette.accent),
+            ColorSequenceKeypoint.new(1, pair and pair[2] or palette.accent2),
+        }),
+        Rotation = 25,
+    })
+    return f
+end
+
+local function glyph(parent, text, pos, size, glyphSize, color, z)
+    local g = make("TextLabel", parent, {
+        BackgroundTransparency = 1, BorderSizePixel = 0,
+        Position = pos, Size = size, Text = text,
+        Font = Enum.Font.GothamMedium, TextSize = glyphSize or 15,
+        TextColor3 = color or palette.text, TextXAlignment = Enum.TextXAlignment.Center,
+        TextYAlignment = Enum.TextYAlignment.Center, TextWrapped = false,
+        TextTruncate = Enum.TextTruncate.None, Active = false, ZIndex = z or 15,
+    })
+    return g
+end
+
+
+-- Vector-style icons: draw from native Frames/UIStrokes so they do not depend on
+-- rare Unicode glyphs that can render as tofu boxes on some Roblox devices.
+local function markIconPart(obj)
+    obj:SetAttribute("DGIconPart", true)
+    if UI.drawingIconRole then
+        obj:SetAttribute("DGIconColorRole", UI.drawingIconRole)
+        if UI.iconColorBindings then table.insert(UI.iconColorBindings, obj) end
+    end
+    return obj
+end
+
+local function setIconColor(iconRoot, color)
+    if not iconRoot then return end
+    for _, part in ipairs(iconRoot:GetDescendants()) do
+        if part:GetAttribute("DGIconPart") then
+            if part:IsA("UIStroke") then
+                part.Color = color
+            elseif part:IsA("TextLabel") then
+                part.TextColor3 = color
+            elseif part:IsA("Frame") then
+                part.BackgroundColor3 = color
+            end
+        end
+    end
+end
+
+local function makeIconLine(parent, x1, y1, x2, y2, color, thickness, z)
+    local dx, dy = x2 - x1, y2 - y1
+    local length = math.sqrt(dx * dx + dy * dy)
+    local angle = math.deg(math.atan2(dy, dx))
+    local line = make("Frame", parent, {
+        Position = UDim2.fromOffset((x1 + x2) / 2 - length / 2, (y1 + y2) / 2 - (thickness or 1.5) / 2),
+        Size = UDim2.fromOffset(math.max(1, length), thickness or 1.5),
+        Rotation = angle, BackgroundColor3 = color, BorderSizePixel = 0,
+        ZIndex = z or 20,
+    })
+    markIconPart(line)
+    addCorner(line, math.max(1, (thickness or 1.5) / 2))
+    return line
+end
+
+local function makeIconDot(parent, x, y, diameter, color, z)
+    local dot = make("Frame", parent, {
+        Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(diameter, diameter),
+        BackgroundColor3 = color, BorderSizePixel = 0, ZIndex = z or 20,
+    })
+    addCorner(dot, diameter / 2)
+    markIconPart(dot)
+    return dot
+end
+
+local function makeIconRing(parent, x, y, diameter, color, thickness, z)
+    local ring = make("Frame", parent, {
+        Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(diameter, diameter),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = z or 20,
+    })
+    addCorner(ring, diameter / 2)
+    local stroke = make("UIStroke", ring, {
+        Color = color, Thickness = thickness or 1.2,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    })
+    markIconPart(stroke)
+    return ring
+end
+
+local function drawIcon(parent, kind, position, size, color, z)
+    local width = math.max(8, size.X.Offset + size.X.Scale * (parent.AbsoluteSize.X or 0))
+    local height = math.max(8, size.Y.Offset + size.Y.Scale * (parent.AbsoluteSize.Y or 0))
+    local previousIconRole = UI.drawingIconRole
+    UI.drawingIconRole = nil
+    for _, role in ipairs({ "text", "muted", "accent", "accent2", "danger", "border" }) do
+        if palette[role] and color == palette[role] then
+            UI.drawingIconRole = role
+            break
+        end
+    end
+    local unit = math.min(width, height) / 16
+    local ox, oy = (width - 16 * unit) / 2, (height - 16 * unit) / 2
+    local function px(v) return ox + v * unit end
+    local function py(v) return oy + v * unit end
+    local root = make("Frame", parent, {
+        Name = "VectorIcon_" .. kind, Position = position, Size = size,
+        BackgroundTransparency = 1, BorderSizePixel = 0, Active = false, ClipsDescendants = true, ZIndex = z or 18,
+    })
+    -- The drawing parts live inside a positioned icon canvas; local coordinates are
+    -- translated so a tall navigation hitbox still centers a square glyph.
+    local canvas = root
+    local function line2(x1, y1, x2, y2, thick)
+        local function Lx(v) return px(v) end
+        local function Ly(v) return py(v) end
+        return makeIconLine(canvas, Lx(x1), Ly(y1), Lx(x2), Ly(y2), color, math.max(1, (thick or 1.35) * unit), z)
+    end
+    local function dot2(x, y, d)
+        return makeIconDot(canvas, px(x), py(y), math.max(1, d * unit), color, z)
+    end
+    local function ring2(x, y, d, thick)
+        return makeIconRing(canvas, px(x), py(y), math.max(5, d * unit), color, math.max(1, (thick or 1.2) * unit), z)
+    end
+
+    if kind == "music" or kind == "vinyl" then
+        -- Vinyl record fallback: dark platter, concentric grooves, label and spindle.
+        -- Everything is drawn with GUI geometry instead of a font glyph.
+        local discSize = 14 * unit
+        local disc = make("Frame", canvas, {
+            Name = "VinylRecord",
+            Position = UDim2.fromOffset(px(1), py(1)), Size = UDim2.fromOffset(discSize, discSize),
+            BackgroundColor3 = Color3.fromRGB(7, 10, 24), BorderSizePixel = 0, ZIndex = z or 18,
+        })
+        addCorner(disc, discSize / 2)
+        make("UIGradient", disc, { Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(31, 35, 62)),
+            ColorSequenceKeypoint.new(0.48, Color3.fromRGB(8, 11, 25)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(23, 26, 48)),
+        }), Rotation = 35 })
+        local edge = make("UIStroke", disc, { Color = Color3.fromRGB(91, 105, 153), Thickness = math.max(1, 0.65 * unit), Transparency = 0.1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border })
+        registerTheme(edge, "Color", "border")
+        local function groove(scale, strokeColor, transparency, thickness)
+            local side = discSize * scale
+            local circle = make("Frame", disc, {
+                AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+                Size = UDim2.fromOffset(side, side), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = (z or 18) + 1,
+            })
+            addCorner(circle, side / 2)
+            local line = make("UIStroke", circle, { Color = strokeColor, Thickness = math.max(1, thickness * unit), Transparency = transparency, ApplyStrokeMode = Enum.ApplyStrokeMode.Border })
+            registerTheme(line, "Color", "border")
+        end
+        groove(0.78, Color3.fromRGB(74, 83, 123), 0.28, 0.48)
+        groove(0.60, Color3.fromRGB(60, 69, 106), 0.18, 0.48)
+        groove(0.42, Color3.fromRGB(85, 91, 128), 0.3, 0.42)
+        local sheen = make("Frame", disc, {
+            Position = UDim2.new(0.5, -math.max(1, 0.42 * unit), 0.12, 0),
+            Size = UDim2.fromOffset(math.max(1, 0.85 * unit), math.max(2, 2.8 * unit)),
+            Rotation = 18, BackgroundColor3 = Color3.fromRGB(172, 188, 239),
+            BackgroundTransparency = 0.22, BorderSizePixel = 0, ZIndex = (z or 18) + 2,
+        })
+        addCorner(sheen, math.max(1, unit))
+        local labelSize = discSize * 0.32
+        local centerLabel = make("Frame", disc, {
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+            Size = UDim2.fromOffset(labelSize, labelSize), BackgroundColor3 = palette.accent,
+            BorderSizePixel = 0, ZIndex = (z or 18) + 3,
+        })
+        addCorner(centerLabel, labelSize / 2); markIconPart(centerLabel)
+        registerTheme(centerLabel, "BackgroundColor3", "accent")
+        local centerGradient = make("UIGradient", centerLabel, { Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, palette.accent2), ColorSequenceKeypoint.new(1, palette.accent) }), Rotation = 45 })
+        table.insert(accentGradients, centerGradient)
+        local spindle = make("Frame", disc, {
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+            Size = UDim2.fromOffset(math.max(1.5, 1.3 * unit), math.max(1.5, 1.3 * unit)),
+            BackgroundColor3 = Color3.fromRGB(238, 242, 255), BorderSizePixel = 0, ZIndex = (z or 18) + 4,
+        })
+        addCorner(spindle, 4)
+    elseif kind == "user" then
+        -- Neutral user silhouette used only while the requested avatar thumbnail loads.
+        ring2(5.1, 1.4, 5.8, 1.35)
+        line2(3.0, 14.0, 3.0, 12.0, 1.45)
+        line2(3.0, 12.0, 4.8, 10.0, 1.45)
+        line2(4.8, 10.0, 6.3, 9.2, 1.45)
+        line2(6.3, 9.2, 9.7, 9.2, 1.45)
+        line2(9.7, 9.2, 11.2, 10.0, 1.45)
+        line2(11.2, 10.0, 13.0, 12.0, 1.45)
+        line2(13.0, 12.0, 13.0, 14.0, 1.45)
+        line2(3.0, 14.0, 13.0, 14.0, 1.45)
+    elseif kind == "heart" then
+        -- Heart outline built from rounded vector strokes (no Unicode fallback).
+        line2(8, 13.8, 2.8, 8.7, 1.55)
+        line2(2.8, 8.7, 2.2, 6.1, 1.55)
+        line2(2.2, 6.1, 3.5, 3.7, 1.55)
+        line2(3.5, 3.7, 5.8, 3.1, 1.55)
+        line2(5.8, 3.1, 8, 5.1, 1.55)
+        line2(8, 5.1, 10.2, 3.1, 1.55)
+        line2(10.2, 3.1, 12.5, 3.7, 1.55)
+        line2(12.5, 3.7, 13.8, 6.1, 1.55)
+        line2(13.8, 6.1, 13.2, 8.7, 1.55)
+        line2(13.2, 8.7, 8, 13.8, 1.55)
+    elseif kind == "clock" then
+        ring2(2, 2, 12, 1.25); line2(8, 4.3, 8, 8); line2(8, 8, 11, 9.7)
+    elseif kind == "grid" then
+        for _, p in ipairs({ {2,2}, {9,2}, {2,9}, {9,9} }) do
+            local square = make("Frame", canvas, {
+                Position = UDim2.fromOffset(px(p[1]), py(p[2])), Size = UDim2.fromOffset(math.max(3, 5 * unit), math.max(3, 5 * unit)),
+                BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = z or 18,
+            })
+            addCorner(square, math.max(1, unit)); markIconPart(make("UIStroke", square, { Color = color, Thickness = math.max(1, 1.15 * unit) }))
+        end
+    elseif kind == "settings" then
+        -- Compact gear: even teeth and a clean double-ring center remain legible at 13 px.
+        ring2(4.3, 4.3, 7.4, 1.2)
+        ring2(6.2, 6.2, 3.6, 1.15)
+        line2(8, 0.9, 8, 3.1, 1.25); line2(8, 12.9, 8, 15.1, 1.25)
+        line2(0.9, 8, 3.1, 8, 1.25); line2(12.9, 8, 15.1, 8, 1.25)
+        line2(2.4, 2.4, 4.0, 4.0, 1.15); line2(12.0, 12.0, 13.6, 13.6, 1.15)
+        line2(12.0, 4.0, 13.6, 2.4, 1.15); line2(2.4, 13.6, 4.0, 12.0, 1.15)
+    elseif kind == "pin" then
+        line2(5, 2.5, 11, 2.5, 1.35); line2(6, 2.5, 6, 6.8, 1.35)
+        line2(10, 2.5, 10, 6.8, 1.35); line2(6, 6.8, 10, 6.8, 1.35)
+        line2(8, 6.8, 8, 13.8, 1.45); line2(8, 13.8, 7.0, 12.5, 1.15)
+    elseif kind == "edit" then
+        line2(4.0, 11.9, 11.9, 4.0, 2.0); line2(3.0, 13.1, 4.0, 11.9, 1.35)
+        line2(3.0, 13.1, 5.0, 12.8, 1.35); line2(11.9, 4.0, 10.9, 3.0, 1.6)
+        line2(5.1, 13.0, 13.0, 5.1, 0.9)
+    elseif kind == "palette" then
+        ring2(2.0, 2.0, 12.0, 1.2)
+        dot2(5.0, 5.0, 1.8); dot2(9.5, 4.5, 1.8); dot2(5.3, 9.3, 1.8)
+        line2(9.0, 10.6, 11.2, 10.6, 1.15)
+    elseif kind == "rotate-cw" then
+        ring2(3.0, 3.0, 10.0, 1.2)
+        line2(10.2, 2.3, 13.6, 2.6, 1.3); line2(13.6, 2.6, 12.1, 5.0, 1.3)
+    elseif kind == "crown" then
+        line2(2, 5, 4, 11); line2(4, 11, 12, 11); line2(12, 11, 14, 5)
+        line2(2, 5, 6, 8); line2(6, 8, 8, 3); line2(8, 3, 10, 8); line2(10, 8, 14, 5); line2(4, 13, 12, 13)
+        dot2(1, 3.7, 2.6); dot2(6.7, 1.5, 2.6); dot2(12.7, 3.7, 2.6)
+    elseif kind == "headphones" then
+        line2(2, 9, 2, 7); line2(2, 7, 4, 3.5); line2(4, 3.5, 8, 2); line2(8, 2, 12, 3.5); line2(12, 3.5, 14, 7); line2(14, 7, 14, 9)
+        local leftCup = make("Frame", canvas, { Position = UDim2.fromOffset(px(1), py(8)), Size = UDim2.fromOffset(math.max(2, 3 * unit), math.max(4, 5 * unit)), BackgroundColor3 = color, BorderSizePixel = 0, ZIndex = z or 18 })
+        addCorner(leftCup, unit); markIconPart(leftCup)
+        local rightCup = make("Frame", canvas, { Position = UDim2.fromOffset(px(12), py(8)), Size = UDim2.fromOffset(math.max(2, 3 * unit), math.max(4, 5 * unit)), BackgroundColor3 = color, BorderSizePixel = 0, ZIndex = z or 18 })
+        addCorner(rightCup, unit); markIconPart(rightCup)
+    elseif kind == "pulse" then
+        line2(1, 8, 4, 8); line2(4, 8, 6, 4); line2(6, 4, 8, 12); line2(8, 12, 10, 6); line2(10, 6, 12, 8); line2(12, 8, 15, 8)
+    elseif kind == "spark" then
+        line2(8, 1.5, 8, 14.5); line2(1.5, 8, 14.5, 8); line2(3.2, 3.2, 12.8, 12.8); line2(3.2, 12.8, 12.8, 3.2)
+        dot2(6.3, 6.3, 3.4)
+    elseif kind == "shuffle" then
+        line2(2, 4, 5, 4); line2(5, 4, 11, 12); line2(11, 12, 14, 12)
+        line2(2, 12, 5, 12); line2(5, 12, 11, 4); line2(11, 4, 14, 4)
+        line2(11.5, 1.8, 14.5, 4); line2(14.5, 4, 11.5, 6.2)
+        line2(11.5, 9.8, 14.5, 12); line2(14.5, 12, 11.5, 14.2)
+    elseif kind == "repeat" then
+        line2(3, 5, 12, 5); line2(12, 5, 10, 3); line2(12, 5, 10, 7)
+        line2(13, 11, 4, 11); line2(4, 11, 6, 9); line2(4, 11, 6, 13)
+        line2(3, 5, 2, 6.5); line2(13, 11, 14, 9.5)
+    elseif kind == "speaker" then
+        local body = make("Frame", canvas, { Position = UDim2.fromOffset(px(1.5), py(6)), Size = UDim2.fromOffset(math.max(2, 3 * unit), math.max(4, 4 * unit)), BackgroundColor3 = color, BorderSizePixel = 0, ZIndex = z or 18 })
+        addCorner(body, math.max(1, unit / 2)); markIconPart(body)
+        line2(4.5, 6, 8.5, 3); line2(8.5, 3, 8.5, 13); line2(8.5, 13, 4.5, 10)
+        line2(10.5, 5.5, 12, 7); line2(12, 7, 12, 9); line2(12, 9, 10.5, 10.5)
+        line2(12.3, 3.5, 14.2, 6); line2(14.2, 6, 14.2, 10); line2(14.2, 10, 12.3, 12.5)
+    elseif kind == "previous" then
+        line2(4, 3, 4, 13, 1.6); line2(12, 4, 6, 8); line2(6, 8, 12, 12)
+    elseif kind == "next" then
+        line2(12, 3, 12, 13, 1.6); line2(4, 4, 10, 8); line2(10, 8, 4, 12)
+    elseif kind == "plusCircle" then
+        ring2(1.5, 1.5, 13, 1.2); line2(8, 4, 8, 12); line2(4, 8, 12, 8)
+    elseif kind == "diamond" then
+        line2(8, 1.5, 14, 8); line2(14, 8, 8, 14.5); line2(8, 14.5, 2, 8); line2(2, 8, 8, 1.5)
+    elseif kind == "dynamic" then
+        -- Compact player window + a small waveform, drawn from Roblox Frames/UIStrokes.
+        local shell = make("Frame", canvas, {
+            Position = UDim2.fromOffset(px(1.8), py(3)),
+            Size = UDim2.fromOffset(12.4 * unit, 10 * unit),
+            BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = z or 18,
+        })
+        addCorner(shell, math.max(2, 2.5 * unit))
+        local outline = make("UIStroke", shell, { Color = color, Thickness = math.max(1, 1.05 * unit), ApplyStrokeMode = Enum.ApplyStrokeMode.Border })
+        markIconPart(outline)
+        line2(4, 8, 5.2, 8); line2(5.2, 8, 6.3, 5.4); line2(6.3, 5.4, 7.7, 10.5)
+        line2(7.7, 10.5, 9.2, 6.4); line2(9.2, 6.4, 10.4, 8); line2(10.4, 8, 12, 8)
+    elseif kind == "window" then
+        line2(3, 2.5, 13, 2.5); line2(13, 2.5, 13, 13.5)
+        line2(13, 13.5, 3, 13.5); line2(3, 13.5, 3, 2.5)
+        line2(3.5, 5.3, 12.5, 5.3, 1.1)
+    elseif kind == "play" then
+        -- Filled triangle from native frames. This remains legible at small touch-control sizes.
+        for row = 0, 10 do
+            local taper = 1 - math.abs(row - 5) / 5
+            local barWidth = math.max(1, 8.2 * taper * unit)
+            local barHeight = math.max(1, 1.02 * unit)
+            local bar = make("Frame", canvas, {
+                Position = UDim2.fromOffset(px(4.8), py(3 + row) - barHeight / 2),
+                Size = UDim2.fromOffset(barWidth, barHeight),
+                BackgroundColor3 = color, BorderSizePixel = 0, ZIndex = z or 18,
+            })
+            markIconPart(bar)
+            addCorner(bar, math.max(1, barHeight / 2))
+        end
+    elseif kind == "close" then
+        line2(4, 4, 12, 12, 1.45); line2(12, 4, 4, 12, 1.45)
+    end
+    UI.drawingIconRole = previousIconRole
+    return root
+end
+
+local function spinVinyl(iconRoot, seconds)
+    if not iconRoot then return nil end
+    for _, entry in ipairs(UI.vinylRoots) do
+        if entry.root == iconRoot then return iconRoot end
+    end
+    table.insert(UI.vinylRoots, { root = iconRoot, seconds = seconds or 4.2 })
+    return iconRoot
+end
+
+local function syncVinylSpins()
+    local liveDiscs = {}
+    for i = #UI.vinylRoots, 1, -1 do
+        local entry = UI.vinylRoots[i]
+        local iconRoot = entry and entry.root
+        if not iconRoot or not iconRoot.Parent then
+            table.remove(UI.vinylRoots, i)
+        else
+            local disc = iconRoot:FindFirstChild("VinylRecord", true)
+            if disc and disc:IsA("GuiObject") then
+                liveDiscs[disc] = true
+                local tween = UI.vinylTweens[disc]
+                if isPlaybackActive() and state.motion and state.visualizerStyle ~= "Wave" then
+                    if not tween then
+                        -- Start from the current angle and rotate one full turn per cycle;
+                        -- pausing and resuming will not snap the record back to zero.
+                        local startRotation = disc.Rotation % 360
+                        tween = TweenService:Create(disc, TweenInfo.new(entry.seconds or 3.6, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1, false), { Rotation = startRotation + 360 })
+                        UI.vinylTweens[disc] = tween
+                        tween:Play()
+                    end
+                else
+                    if tween then
+                        pcall(function() tween:Cancel() end)
+                        UI.vinylTweens[disc] = nil
+                    end
+                    -- Hold the platter at its exact current angle while paused.
+                end
+            end
+        end
+    end
+    for disc, tween in pairs(UI.vinylTweens) do
+        if not liveDiscs[disc] or not disc.Parent then
+            pcall(function() tween:Cancel() end)
+            UI.vinylTweens[disc] = nil
+        end
+    end
+    -- Rotate only the circular center artwork while actual playback is active.
+    -- The waveform bars remain anchored, so the ring itself stays stable and readable.
+    for _, waveDisc in ipairs(UI.waveArtworkRoots or {}) do
+        if waveDisc and waveDisc.Parent then
+            local waveTween = UI.waveArtworkTweens[waveDisc]
+            if state.visualizerStyle == "Wave" and state.motion and isPlaybackActive() then
+                if not waveTween then
+                    waveTween = TweenService:Create(waveDisc, TweenInfo.new(8.5, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1, false), { Rotation = waveDisc.Rotation + 360 })
+                    UI.waveArtworkTweens[waveDisc] = waveTween
+                    waveTween:Play()
+                end
+            elseif waveTween then
+                pcall(function() waveTween:Cancel() end)
+                UI.waveArtworkTweens[waveDisc] = nil
+            end
+        end
+    end
+    for waveDisc, tween in pairs(UI.waveArtworkTweens or {}) do
+        if not waveDisc or not waveDisc.Parent then
+            pcall(function() tween:Cancel() end)
+            UI.waveArtworkTweens[waveDisc] = nil
+        end
+    end
+    for _, badge in ipairs(UI.playingDiscBadges) do
+        if badge and badge.Parent then badge.Visible = isPlaybackActive() and state.visualizerStyle ~= "Wave" end
+    end
+end
+
+local function createPlayingDiscBadge(parent, position, size, z)
+    local badge = make("Frame", parent, {
+        Name = "PlayingVinylBadge", Position = position, Size = UDim2.fromOffset(size, size),
+        BackgroundColor3 = palette.bg, BackgroundTransparency = 0.08,
+        BorderSizePixel = 0, ClipsDescendants = true, Visible = false, ZIndex = z or 24,
+    })
+    addCorner(badge, math.floor(size / 2))
+    registerTheme(badge, "BackgroundColor3", "bg")
+    local outline = addStroke(badge, palette.accent, 1.1, 0.02, true)
+    registerTheme(outline, "Color", "accent")
+    local discIcon = drawIcon(badge, "vinyl", UDim2.fromOffset(0, 0), UDim2.fromOffset(size, size), palette.accent, (z or 24) + 2)
+    spinVinyl(discIcon, 2.8)
+    table.insert(UI.playingDiscBadges, badge)
+    return badge
+end
+
+local function createIconButton(parent, kind, position, size, opts)
+    opts = opts or {}
+    local btn = button(parent, "", position, size, opts)
+    local iconSize = opts.iconSize or math.max(12, math.min(size.X.Offset, size.Y.Offset) - 8)
+    local iconColor = palette[opts.iconRole or opts.textRole or "muted"] or palette.muted
+    local icon = drawIcon(btn, kind, UDim2.new(0.5, -iconSize / 2, 0.5, -iconSize / 2), UDim2.fromOffset(iconSize, iconSize), iconColor, (opts.z or 12) + 1)
+    return btn, icon
+end
+
+local function createPlayPauseButton(parent, position, size, opts)
+    local btn = button(parent, "", position, size, opts)
+    local w, h = size.X.Offset, size.Y.Offset
+    local iconSize = math.max(13, math.floor(math.min(w, h) * 0.52))
+    local playGlyph = drawIcon(btn, "play", UDim2.new(0.5, -iconSize / 2 + 1, 0.5, -iconSize / 2), UDim2.fromOffset(iconSize, iconSize), palette.text, (opts and opts.z or 12) + 1)
+    local barHeight = math.max(8, math.floor(h * 0.39))
+    local barWidth = math.max(2, math.floor(w * 0.07))
+    local gap = math.max(3, math.floor(w * 0.09))
+    local totalWidth = barWidth * 2 + gap
+    local pause = make("Frame", btn, { Position = UDim2.new(0.5, -totalWidth / 2, 0.5, -barHeight / 2), Size = UDim2.fromOffset(totalWidth, barHeight), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false, ZIndex = (opts and opts.z or 12) + 2 })
+    local pauseLeft = make("Frame", pause, { Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(barWidth, barHeight), BackgroundColor3 = palette.text, BorderSizePixel = 0, ZIndex = (opts and opts.z or 12) + 2 })
+    local pauseRight = make("Frame", pause, { Position = UDim2.fromOffset(barWidth + gap, 0), Size = UDim2.fromOffset(barWidth, barHeight), BackgroundColor3 = palette.text, BorderSizePixel = 0, ZIndex = (opts and opts.z or 12) + 2 })
+    addCorner(pauseLeft, 2); addCorner(pauseRight, 2)
+    registerTheme(pauseLeft, "BackgroundColor3", "text")
+    registerTheme(pauseRight, "BackgroundColor3", "text")
+    return btn, playGlyph, pause
+end
+
+local function createTransportButton(parent, kind, position, size, opts)
+    local btn = button(parent, "", position, size, opts)
+    local iconSize = math.max(12, math.min(size.X.Offset, size.Y.Offset) - 7)
+    drawIcon(btn, kind == "previous" and "previous" or "next", UDim2.new(0.5, -iconSize / 2, 0.5, -iconSize / 2), UDim2.fromOffset(iconSize, iconSize), palette.text, (opts and opts.z or 12) + 1)
+    return btn
+end
+
+local function createDotsButton(parent, position, size, opts, vertical)
+    local btn = button(parent, "", position, size, opts)
+    local w, h = size.X.Offset, size.Y.Offset
+    local color = palette[(opts and opts.textRole) or "muted"] or palette.muted
+    for i = 1, 3 do
+        local dotSize = math.max(2, math.floor(math.min(w, h) * 0.09))
+        local x, y
+        if vertical then
+            x = (w - dotSize) / 2
+            y = h * (i / 4) - dotSize / 2
+        else
+            x = w * (i / 4) - dotSize / 2
+            y = (h - dotSize) / 2
+        end
+        local dot = make("Frame", btn, { Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(dotSize, dotSize), BackgroundColor3 = color, BorderSizePixel = 0, ZIndex = ((opts and opts.z) or 12) + 1 })
+        addCorner(dot, dotSize)
+        registerTheme(dot, "BackgroundColor3", (opts and opts.textRole) or "muted")
+    end
+    return btn
+end
+
+local function createMenuButton(parent, position, size, opts)
+    local btn = button(parent, "", position, size, opts)
+    local w, h = size.X.Offset, size.Y.Offset
+    local color = palette[(opts and opts.textRole) or "text"] or palette.text
+    local lineW = math.floor(w * 0.40)
+    local lineH = math.max(1, math.floor(h * 0.06))
+    for i = 1, 3 do
+        local line = make("Frame", btn, { Position = UDim2.fromOffset((w - lineW) / 2, h * (i / 4) - lineH / 2), Size = UDim2.fromOffset(lineW, lineH), BackgroundColor3 = color, BorderSizePixel = 0, ZIndex = ((opts and opts.z) or 12) + 1 })
+        addCorner(line, lineH)
+        registerTheme(line, "BackgroundColor3", (opts and opts.textRole) or "text")
+    end
+    return btn
+end
+
+local function createMagnifier(parent, position, size, color, z)
+    local group = make("Frame", parent, { Position = position, Size = size, BackgroundTransparency = 1, BorderSizePixel = 0, Active = false, ZIndex = z or 15 })
+    local diameter = math.max(7, math.floor(math.min(size.X.Offset, size.Y.Offset) * 0.58))
+    local circle = make("Frame", group, { Position = UDim2.fromOffset(1, 1), Size = UDim2.fromOffset(diameter, diameter), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = (z or 15) })
+    addCorner(circle, diameter)
+    local iconColor = color or palette.muted
+    local colorRole = (iconColor == palette.accent or iconColor == palette.accent2) and "accent" or "muted"
+    local circleStroke = addStroke(circle, iconColor, 1.35, 0, false)
+    registerTheme(circleStroke, "Color", colorRole)
+    local handle = make("Frame", group, { Position = UDim2.fromOffset(diameter - 1, diameter - 1), Size = UDim2.fromOffset(2, math.max(4, size.Y.Offset * 0.31)), Rotation = -45, BackgroundColor3 = iconColor, BorderSizePixel = 0, ZIndex = (z or 15) + 1 })
+    registerTheme(handle, "BackgroundColor3", colorRole)
+    addCorner(handle, 1)
+    return group
+end
+
+local function createSpeakerButton(parent, position, size, opts)
+    local btn, icon = createIconButton(parent, "speaker", position, size, opts)
+    return btn, icon
+end
+
+local function updateCoverGradient(frame, track)
+    local index = 1
+    for i, candidate in ipairs(tracks) do
+        if candidate.Id == track.Id then index = i; break end
+    end
+    local pair = COVER_PAIRS[((index - 1) % #COVER_PAIRS) + 1]
+    frame.BackgroundColor3 = pair[1]
+    local gradient = frame:FindFirstChildOfClass("UIGradient")
+    if gradient then
+        gradient.Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, pair[1]), ColorSequenceKeypoint.new(1, pair[2]) })
+    else
+        make("UIGradient", frame, { Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, pair[1]), ColorSequenceKeypoint.new(1, pair[2]) }), Rotation = 25 })
+    end
+end
+
+local function applyTheme(name)
+    if not COLORS[name] then return end
+    state.theme = name
+    palette = COLORS[name]
+    for i = #themeBindings, 1, -1 do
+        local record = themeBindings[i]
+        if not record.object or not record.object.Parent then
+            table.remove(themeBindings, i)
+        elseif palette[record.role] then
+            pcall(function() record.object[record.property] = palette[record.role] end)
+        end
+    end
+    for _, gradient in ipairs(accentGradients) do
+        if gradient and gradient.Parent then
+            gradient.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, palette.accent),
+                ColorSequenceKeypoint.new(0.54, Color3.fromRGB(112, 74, 255)),
+                ColorSequenceKeypoint.new(1, palette.accent2),
+            })
+        end
+    end
+    for i = #themeGradients, 1, -1 do
+        local record = themeGradients[i]
+        local gradient = record and record.gradient
+        if not gradient or not gradient.Parent then
+            table.remove(themeGradients, i)
+        else
+            gradient.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, palette[record.fromRole] or palette.bg),
+                ColorSequenceKeypoint.new(1, palette[record.toRole] or palette.panel),
+            })
+            gradient.Rotation = record.rotation or 0
+        end
+    end
+    -- Recolour vector-icon strokes/fills by semantic role on theme changes.
+    for _, part in ipairs(screenGui:GetDescendants()) do
+        local role = part:GetAttribute("DGIconColorRole")
+        local value = role and palette[role]
+        if value then
+            pcall(function()
+                if part:IsA("UIStroke") then
+                    part.Color = value
+                elseif part:IsA("TextLabel") then
+                    part.TextColor3 = value
+                elseif part:IsA("GuiObject") then
+                    part.BackgroundColor3 = value
+                end
+            end)
+        end
+    end
+    if controls.refreshAll then controls.refreshAll() end
+end
+
+local function rgbAccentPair()
+    local a, b = palette.accent, palette.accent2
+    local speed = math.clamp(tonumber(state.rgbSpeed) or 0.45, 0, 1)
+    local phase = (os.clock() * (0.018 + speed * speed * 0.58)) % 1
+    local phase2 = (phase + 0.34) % 1
+    local function cycle(t)
+        if t < 0.5 then return a:Lerp(b, t * 2) end
+        return b:Lerp(a, (t - 0.5) * 2)
+    end
+    local brightness = math.clamp(tonumber(state.rgbBrightness) or 0.75, 0.08, 1)
+    local ca, cb = cycle(phase), cycle(phase2)
+    local floorLight = 0.10 + brightness * 0.90
+    return Color3.new(ca.R * floorLight, ca.G * floorLight, ca.B * floorLight), Color3.new(cb.R * floorLight, cb.G * floorLight, cb.B * floorLight)
+end
+
+local function applyRGBFrame()
+    local ca, cb
+    if state.rgbEnabled then
+        ca, cb = rgbAccentPair()
+    else
+        ca, cb = palette.accent, palette.accent2
+    end
+    -- ⭐ UPGRADE: RGB cache — update only accent-bound objects rather than every theme binding.
+    for i = #rgbThemeBindings, 1, -1 do
+        local record = rgbThemeBindings[i]
+        local object = record and record.object
+        if not object or not object.Parent then
+            table.remove(rgbThemeBindings, i)
+        else
+            local value = record.role == "accent" and ca or cb
+            pcall(function() object[record.property] = value end)
+        end
+    end
+    for i = #accentGradients, 1, -1 do
+        local gradient = accentGradients[i]
+        if not gradient or not gradient.Parent then
+            table.remove(accentGradients, i)
+        else
+            gradient.Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, ca), ColorSequenceKeypoint.new(0.54, ca:Lerp(cb, 0.5)), ColorSequenceKeypoint.new(1, cb) })
+        end
+    end
+    -- ⭐ UPGRADE: RGB gradient cache — animated gradients only, never all theme gradients.
+    for i = #rgbThemeGradients, 1, -1 do
+        local record = rgbThemeGradients[i]
+        local gradient = record and record.gradient
+        if not gradient or not gradient.Parent then
+            table.remove(rgbThemeGradients, i)
+        else
+            local fromColor = record.fromRole == "accent" and ca or record.fromRole == "accent2" and cb or palette[record.fromRole] or palette.bg
+            local toColor = record.toRole == "accent" and ca or record.toRole == "accent2" and cb or palette[record.toRole] or palette.panel
+            gradient.Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, fromColor), ColorSequenceKeypoint.new(1, toColor) })
+        end
+    end
+    -- Icon parts are registered at creation; this replaces an expensive GetDescendants scan every RGB frame.
+    for i = #UI.iconColorBindings, 1, -1 do
+        local part = UI.iconColorBindings[i]
+        if not part or not part.Parent then
+            table.remove(UI.iconColorBindings, i)
+        else
+            local role = part:GetAttribute("DGIconColorRole")
+            local value = role == "accent" and ca or role == "accent2" and cb or nil
+            if value then
+                pcall(function()
+                    if part:IsA("UIStroke") then part.Color = value
+                    elseif part:IsA("TextLabel") then part.TextColor3 = value
+                    elseif part:IsA("GuiObject") then part.BackgroundColor3 = value end
+                end)
+            end
+        end
+    end
+end
+
+local function formatTime(value)
+    value = math.max(0, math.floor(tonumber(value) or 0))
+    return string.format("%02d:%02d", math.floor(value / 60), value % 60)
+end
+
+local function formatDuration(value)
+    local numeric = tonumber(value)
+    if not numeric or numeric <= 0 then return "--:--" end
+    return formatTime(numeric)
+end
+
+local function findTrack(id)
+    for _, track in ipairs(tracks) do
+        if track.Id == tostring(id) then return track end
+    end
+    return nil
+end
+
+local EMPTY_TRACK = { Id = "", Title = "Chưa có bài hát", Duration = 0, Genre = "Khác", Favorite = false, Demo = true }
+local function selectedTrack()
+    return findTrack(state.selectedId) or tracks[1] or EMPTY_TRACK
+end
+
+local function addRecent(id)
+    local newer = { id }
+    for _, previous in ipairs(state.recent) do
+        if previous ~= id and #newer < 8 then table.insert(newer, previous) end
+    end
+    state.recent = newer
+end
+
+local BASE_MODE_SIZES = {
+    Full = Vector2.new(714, 498), Mini = Vector2.new(348, 458), Background = Vector2.new(286, 520),
+}
+-- Full and compact keep the reference proportions; Dynamic is the tall record-player card shown in the concept poster.
+local DESIGN_FACTOR = {
+    Full = 761 / 714,
+    Mini = 377 / 348,
+    Background = 1,
+}
+local function effectiveModeSize(mode)
+    return BASE_MODE_SIZES[mode] * DESIGN_FACTOR[mode]
+end
+local MAX_UI_SCALE = 1.08
+local MIN_UI_SCALE = 0.42
+
+-- ⭐ UPGRADE: addDropShadow — reusable soft depth for principal panels.
+local function addDropShadow(obj, offset, blur, transparency)
+    if not obj or not obj.Parent or obj:GetAttribute("DGShadowAdded") then return nil end
+    offset = math.clamp(tonumber(offset) or 4, 2, 8)
+    blur = math.clamp(tonumber(blur) or 10, 6, 16)
+    transparency = math.clamp(tonumber(transparency) or 0.76, 0.55, 0.92)
+    local parent = obj.Parent
+    local pos, size, anchor = obj.Position, obj.Size, obj.AnchorPoint
+    local shadow = make("Frame", parent, {
+        Name = obj.Name .. "_PremiumShadow", AnchorPoint = anchor,
+        Position = UDim2.new(pos.X.Scale, pos.X.Offset + offset, pos.Y.Scale, pos.Y.Offset + offset),
+        Size = size, BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = transparency, BorderSizePixel = 0,
+        Visible = obj.Visible, Active = false, ClipsDescendants = false,
+        ZIndex = math.max(1, obj.ZIndex - 1),
+    })
+    addCorner(shadow, math.max(6, math.floor(math.min(obj.AbsoluteSize.X, obj.AbsoluteSize.Y) * 0.035)))
+    addStroke(shadow, Color3.new(0, 0, 0), math.clamp(blur * 0.55, 2, 7), math.min(0.99, transparency + 0.16), false)
+    addStroke(shadow, Color3.new(0, 0, 0), math.clamp(blur * 0.25, 1, 3), math.min(0.99, transparency + 0.22), false)
+    obj:SetAttribute("DGShadowAdded", true)
+
+    local parentScale = obj:FindFirstChildOfClass("UIScale")
+    local shadowScale
+    if parentScale then
+        shadowScale = make("UIScale", shadow, { Scale = parentScale.Scale })
+        parentScale:GetPropertyChangedSignal("Scale"):Connect(function()
+            if shadowScale.Parent then shadowScale.Scale = parentScale.Scale end
+        end)
+    end
+    local function syncGeometry()
+        if not obj.Parent or not shadow.Parent then return end
+        local p, sz = obj.Position, obj.Size
+        shadow.AnchorPoint = obj.AnchorPoint
+        shadow.Position = UDim2.new(p.X.Scale, p.X.Offset + offset, p.Y.Scale, p.Y.Offset + offset)
+        shadow.Size = sz
+        shadow.ZIndex = math.max(1, obj.ZIndex - 1)
+    end
+    obj:GetPropertyChangedSignal("Position"):Connect(syncGeometry)
+    obj:GetPropertyChangedSignal("Size"):Connect(syncGeometry)
+    obj:GetPropertyChangedSignal("AnchorPoint"):Connect(syncGeometry)
+    obj:GetPropertyChangedSignal("ZIndex"):Connect(syncGeometry)
+    obj:GetPropertyChangedSignal("Visible"):Connect(function()
+        if shadow.Parent then shadow.Visible = obj.Visible end
+    end)
+    return shadow
+end
+
+local function rootScaleFor(mode)
+    local size = effectiveModeSize(mode)
+    local viewport = Workspace.CurrentCamera and Workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
+    local wanted = math.clamp(tonumber(state.scales[mode]) or 1, MIN_UI_SCALE, MAX_UI_SCALE)
+    -- Leave a little breathing room so the panel does not dominate a phone in landscape.
+    local fit = math.min(MAX_UI_SCALE, math.max(1, viewport.X - 20) / size.X, math.max(1, viewport.Y - 24) / size.Y)
+    return math.max(MIN_UI_SCALE, math.min(wanted, fit))
+end
+
+local function makeShell(name, size, z)
+    -- ⭐ UPGRADE: Glassmorphism — translucent shell, diagonal sheen, and layered neon edge.
+    local root = make("Frame", screenGui, {
+        Name = name, AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(size.X, size.Y),
+        BackgroundColor3 = palette.bg, BackgroundTransparency = 0.08, BorderSizePixel = 0,
+        ClipsDescendants = false, Visible = false, ZIndex = z or 10,
+    })
+    addCorner(root, 17)
+
+    local ambientA = make("Frame", root, {
+        Name = "AmbientTopLeftGlow", Position = UDim2.fromOffset(-42, -48), Size = UDim2.fromOffset(180, 180),
+        BackgroundColor3 = palette.accent, BackgroundTransparency = 0.91, BorderSizePixel = 0,
+        Active = false, ZIndex = z or 10,
+    })
+    addCorner(ambientA, 90)
+    local ambientAGradient = make("UIGradient", ambientA, {
+        Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, palette.accent), ColorSequenceKeypoint.new(1, palette.accent2) }),
+        Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.25), NumberSequenceKeypoint.new(1, 1) }), Rotation = 35,
+    })
+    table.insert(accentGradients, ambientAGradient)
+
+    local ambientB = make("Frame", root, {
+        Name = "AmbientBottomRightGlow", AnchorPoint = Vector2.new(1, 1),
+        Position = UDim2.new(1, 42, 1, 42), Size = UDim2.fromOffset(150, 150),
+        BackgroundColor3 = palette.accent2, BackgroundTransparency = 0.93, BorderSizePixel = 0,
+        Active = false, ZIndex = z or 10,
+    })
+    addCorner(ambientB, 75)
+    local ambientBGradient = make("UIGradient", ambientB, {
+        Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, palette.accent2), ColorSequenceKeypoint.new(1, palette.accent) }),
+        Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.35), NumberSequenceKeypoint.new(1, 1) }), Rotation = 215,
+    })
+    table.insert(accentGradients, ambientBGradient)
+
+    local glassSheen = make("Frame", root, {
+        Name = "GlassSheen", Position = UDim2.fromOffset(1, 1), Size = UDim2.new(1, -2, 0, math.floor(size.Y * 0.45)),
+        BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0.92,
+        BorderSizePixel = 0, ClipsDescendants = true, Active = false, ZIndex = z or 10,
+    })
+    addCorner(glassSheen, 15)
+    make("UIGradient", glassSheen, {
+        Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.new(1, 1, 1)), Rotation = 25,
+        Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.92), NumberSequenceKeypoint.new(0.42, 0.75), NumberSequenceKeypoint.new(1, 1),
+        }),
+    })
+
+    local outerBloom = addStroke(root, palette.accent, 9, 0.965, true)
+    outerBloom.Name = "AmbientOuterGlow"
+    local glow = addStroke(root, palette.accent, 4, 0.80, true)
+    glow.Name = "NeonOuterGlow"
+    local midGlow = addStroke(root, palette.accent, 1.8, 0.46, true)
+    midGlow.Name = "NeonMidGlow"
+    local crisp = addStroke(root, palette.accent, 1.1, 0.06, true)
+    crisp.Name = "NeonEdge"
+    registerTheme(root, "BackgroundColor3", "bg")
+    local scale = make("UIScale", root, { Scale = 1 })
+    return root, scale
+end
+
+UI.fullRoot, UI.fullScale = makeShell("FullInterface", Vector2.new(714, 498), 10)
+UI.miniRoot, UI.miniScale = makeShell("MiniInterface", Vector2.new(348, 458), 10)
+UI.bgRoot, UI.bgScale = makeShell("BackgroundInterface", Vector2.new(286, 520), 10)
+UI.roots = { Full = UI.fullRoot, Mini = UI.miniRoot, Background = UI.bgRoot }
+UI.scales = { Full = UI.fullScale, Mini = UI.miniScale, Background = UI.bgScale }
+addDropShadow(UI.fullRoot, 6, 12, 0.76)
+addDropShadow(UI.miniRoot, 5, 10, 0.78)
+addDropShadow(UI.bgRoot, 5, 10, 0.78)
+
+local function clampPosition(mode, x, y)
+    local viewport = Workspace.CurrentCamera and Workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
+    local size = effectiveModeSize(mode) * rootScaleFor(mode)
+    local halfW, halfH = size.X * 0.5, size.Y * 0.5
+    local minX, maxX = halfW + 5, viewport.X - halfW - 5
+    local minY, maxY = halfH + 5, viewport.Y - halfH - 5
+    -- On exceptionally small viewports, keep the panel centred rather than passing an invalid range to math.clamp.
+    if minX > maxX then x = viewport.X * 0.5 else x = math.clamp(x, minX, maxX) end
+    if minY > maxY then y = viewport.Y * 0.5 else y = math.clamp(y, minY, maxY) end
+    return x, y
+end
+
+local function applyModeGeometry(mode)
+    local root = UI.roots[mode]
+    if not root then return end
+    UI.scales[mode].Scale = rootScaleFor(mode) * DESIGN_FACTOR[mode]
+    local viewport = Workspace.CurrentCamera and Workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
+    local stored = state.positions[mode]
+    local x, y
+    if stored then
+        x, y = stored.X, stored.Y
+    else
+        x = viewport.X * 0.5
+        -- Roblox's top bar sits over the upper-left corner. Center the app in the safe visual area.
+        y = viewport.Y * 0.5 + math.min(42, viewport.Y * 0.06)
+    end
+    x, y = clampPosition(mode, x, y)
+    state.positions[mode] = Vector2.new(x, y)
+    root.Position = UDim2.fromOffset(x, y)
+end
+
+for mode, root in pairs(UI.roots) do
+    applyModeGeometry(mode)
+    root.Visible = (mode == state.mode)
+end
+
+-- Reusable outer modal layer.
+UI.overlay = make("TextButton", screenGui, {
+    Name = "ModalOverlay", Position = UDim2.fromScale(0, 0), Size = UDim2.fromScale(1, 1),
+    BackgroundColor3 = Color3.fromRGB(0, 0, 7), BackgroundTransparency = 0.28,
+    BorderSizePixel = 0, Text = "", AutoButtonColor = false, Visible = false, ZIndex = 100,
+})
+UI.modalBorder = make("Frame", screenGui, {
+    Name = "ModalBorder", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+    Size = UDim2.fromOffset(340, 350), BackgroundColor3 = palette.accent, BorderSizePixel = 0,
+    Visible = false, ZIndex = 101,
+})
+addCorner(UI.modalBorder, 13)
+UI.modalScale = make("UIScale", UI.modalBorder, { Scale = 1 })
+-- ⭐ UPGRADE: ModalNeonStack — clear edge, mid bloom, and wide outer glow.
+local modalOuterGlow = addStroke(UI.modalBorder, palette.accent, 8, 0.85, true)
+modalOuterGlow.Name = "ModalOuterGlow"
+local modalMidGlow = addStroke(UI.modalBorder, palette.accent, 3, 0.45, true)
+modalMidGlow.Name = "ModalMidGlow"
+local modalEdge = addStroke(UI.modalBorder, palette.accent, 1.3, 0.02, true)
+modalEdge.Name = "ModalEdge"
+addDropShadow(UI.modalBorder, 8, 16, 0.66)
+table.insert(accentGradients, make("UIGradient", UI.modalBorder, {
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, palette.accent),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(110, 66, 255)),
+        ColorSequenceKeypoint.new(1, palette.accent2),
+    }), Rotation = 25,
+}))
+make("UIGradient", UI.overlay, {
+    Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(0, 0, 0)), ColorSequenceKeypoint.new(1, palette.deep) }),
+    Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.08), NumberSequenceKeypoint.new(1, 0.32) }), Rotation = 20,
+})
+UI.modalPanel = make("Frame", UI.modalBorder, {
+    Position = UDim2.fromOffset(2, 2), Size = UDim2.new(1, -4, 1, -4),
+    BackgroundColor3 = palette.bg, BackgroundTransparency = 0.04, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 102,
+})
+addCorner(UI.modalPanel, 11)
+registerTheme(UI.modalPanel, "BackgroundColor3", "bg")
+UI.modalTitle = label(UI.modalPanel, "Cài đặt", 13, "text", UDim2.fromOffset(16, 8), UDim2.new(1, -60, 0, 25), { font = Enum.Font.GothamSemibold, z = 103, shadow = true })
+UI.modalClose = createIconButton(UI.modalPanel, "close", UDim2.new(1, -38, 0, 6), UDim2.fromOffset(28, 28), { bgRole = "surface", textRole = "text", radius = 8, z = 104, iconSize = 14 })
+UI.modalBody = make("Frame", UI.modalPanel, { Position = UDim2.fromOffset(10, 42), Size = UDim2.new(1, -20, 1, -52), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 103 })
+UI.toast = make("Frame", screenGui, {
+    Name = "Toast", AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -14),
+    Size = UDim2.fromOffset(286, 34), BackgroundColor3 = palette.surface, BorderSizePixel = 0,
+    Visible = false, ZIndex = 200,
+})
+addCorner(UI.toast, 9); addStroke(UI.toast, palette.accent, 1.2, 0.08, true)
+UI.toastLabel = label(UI.toast, "", 10, "text", UDim2.fromOffset(10, 0), UDim2.new(1, -20, 1, 0), { align = Enum.TextXAlignment.Center, z = 201 })
+
+-- Persistent avatar toggle: the requested Roblox headshot is the actual button artwork.
+-- It stays on-screen while all player layouts are hidden, so it can always restore the UI.
+UI.restoreButton = button(screenGui, "", UDim2.new(1, -20, 0, 92), UDim2.fromOffset(50, 50), {
+    bgRole = "bg", textRole = "text", radius = 25, z = 250, noMotion = false,
+})
+UI.restoreButton.Name = "RestoreMusicUI"
+UI.restoreButton.AnchorPoint = Vector2.new(1, 0)
+UI.restoreButton.Visible = true
+UI.restoreButton.BackgroundTransparency = 0.04
+UI.restoreButton:SetAttribute("UIAction", "Chạm avatar để ẩn/hiện giao diện nhạc")
+UI.restoreButton:SetAttribute("AccessibleLabel", "Ẩn hoặc hiện giao diện nhạc")
+
+-- Fallback is a neutral user silhouette, never a music note or record.
+UI.restoreIcon = drawIcon(UI.restoreButton, "user", UDim2.fromOffset(3, 3), UDim2.fromOffset(44, 44), palette.accent, 252)
+-- Universal settings shortcut: remains available in Full, Mini and Dynamic modes.
+UI.quickSettingsButton, UI.quickSettingsGlyph = createIconButton(screenGui, "grid", UDim2.new(1, -78, 0, 98), UDim2.fromOffset(40, 40), {
+    bgRole = "bg", textRole = "text", radius = 20, z = 250, iconSize = 19,
+})
+UI.quickSettingsButton.Name = "UniversalMusicSettings"
+UI.quickSettingsButton.AnchorPoint = Vector2.new(1, 0)
+UI.quickSettingsButton.Visible = false
+UI.quickSettingsButton:SetAttribute("AccessibleLabel", "Mở cài đặt ở mọi chế độ giao diện")
+local floatingMovedAt = setmetatable({}, { __mode = "k" })
+local function attachFloatingDrag(target)
+    target.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragOperation = {
+                kind = "floatingMove", target = target, input = input,
+                start = input.Position, initial = target.AbsolutePosition,
+                moved = false, converted = false,
+            }
+        end
+    end)
+end
+attachFloatingDrag(UI.restoreButton)
+attachFloatingDrag(UI.quickSettingsButton)
+UI.quickSettingsButton.Activated:Connect(function()
+    if os.clock() - (floatingMovedAt[UI.quickSettingsButton] or -math.huge) < 0.35 then return end
+    if controls.showModal then controls.showModal("Settings") end
+end)
+
+UI.restoreAvatar = make("ImageLabel", UI.restoreButton, {
+    Name = "RestoreImageAsset91434453184512", Position = UDim2.fromOffset(3, 3), Size = UDim2.new(1, -6, 1, -6),
+    BackgroundTransparency = 1, BorderSizePixel = 0,
+    Image = "rbxthumb://type=AvatarHeadShot&id=91434453184512&w=150&h=150",
+    ScaleType = Enum.ScaleType.Crop, ImageColor3 = Color3.new(1, 1, 1), ImageTransparency = 0,
+    Active = false, Selectable = false, ZIndex = 254,
+})
+addCorner(UI.restoreAvatar, 22)
+UI.restoreAvatar.ZIndex = 254
+local function updateRestoreAvatarFallback()
+    if UI.restoreIcon and UI.restoreIcon.Parent then
+        UI.restoreIcon.Visible = not UI.restoreAvatar.IsLoaded
+    end
+end
+UI.restoreAvatar:GetPropertyChangedSignal("IsLoaded"):Connect(updateRestoreAvatarFallback)
+UI.restoreIcon.Visible = not UI.restoreAvatar.IsLoaded
+task.spawn(function()
+    local loaded = false
+    pcall(function() ContentProvider:PreloadAsync({ UI.restoreAvatar }) end)
+    if UI.restoreAvatar.Parent then loaded = UI.restoreAvatar.IsLoaded end
+    if not loaded and UI.restoreAvatar.Parent then
+        -- The provided number may also be an image asset ID; try that form before falling back to a vector icon.
+        UI.restoreAvatar.Image = "rbxassetid://91434453184512"
+        pcall(function() ContentProvider:PreloadAsync({ UI.restoreAvatar }) end)
+    end
+    updateRestoreAvatarFallback()
+end)
+UI.restoreRing = make("Frame", UI.restoreButton, {
+    Name = "AvatarNeonRing", Position = UDim2.fromOffset(0, 0), Size = UDim2.fromScale(1, 1),
+    BackgroundTransparency = 1, BorderSizePixel = 0, Active = false, ZIndex = 255,
+})
+addCorner(UI.restoreRing, 25)
+local restoreRingStroke = addStroke(UI.restoreRing, palette.accent, 1.8, 0, true)
+registerTheme(restoreRingStroke, "Color", "accent")
+
+local function showToast(message)
+    UI.toastLabel.Text = message
+    UI.toast.Visible = true
+    UI.toast.BackgroundTransparency = 0
+    UI.toastLabel.TextTransparency = 0
+    local key = os.clock()
+    UI.toast:SetAttribute("ToastKey", key)
+    task.delay(2.2, function()
+        if UI.toast.Parent and UI.toast:GetAttribute("ToastKey") == key then
+            local tween = TweenService:Create(UI.toast, TweenInfo.new(0.2), { BackgroundTransparency = 1 })
+            tween:Play()
+            TweenService:Create(UI.toastLabel, TweenInfo.new(0.2), { TextTransparency = 1 }):Play()
+            tween.Completed:Wait()
+            if UI.toast.Parent and UI.toast:GetAttribute("ToastKey") == key then UI.toast.Visible = false end
+        end
+    end)
+end
+
+local function closeModal()
+    UI.modalKind = nil
+    UI.overlay.Visible = false
+    UI.modalBorder.Visible = false
+    for _, child in ipairs(UI.modalBody:GetChildren()) do child:Destroy() end
+end
+UI.modalClose.Activated:Connect(closeModal)
+UI.overlay.Activated:Connect(closeModal)
+
+local function setMode(mode)
+    if not UI.roots[mode] then return end
+    closeModal()
+    state.uiHidden = false
+    UI.restoreButton.Visible = true
+    local previousMode = state.mode
+    if UI.modeGeneration then UI.modeGeneration += 1 else UI.modeGeneration = 1 end
+    local generation = UI.modeGeneration
+    state.mode = mode
+
+    if UI.modeTween then pcall(function() UI.modeTween:Cancel() end) end
+    if UI.previousModeTween then pcall(function() UI.previousModeTween:Cancel() end) end
+    if UI.modePositionTween then pcall(function() UI.modePositionTween:Cancel() end) end
+    if UI.previousPositionTween then pcall(function() UI.previousPositionTween:Cancel() end) end
+    if UI.modeRotationTween then pcall(function() UI.modeRotationTween:Cancel() end) end
+    if UI.previousRotationTween then pcall(function() UI.previousRotationTween:Cancel() end) end
+
+    -- If the player changes modes again during an entrance tween, discard stale outgoing roots.
+    for otherMode, otherRoot in pairs(UI.roots) do
+        if otherMode ~= previousMode and otherMode ~= mode then
+            otherRoot.Visible = false
+            otherRoot.Rotation = 0
+            applyModeGeometry(otherMode)
+        end
+    end
+
+    if mode == previousMode then
+        UI.roots[mode].Visible = true
+        UI.roots[mode].Rotation = 0
+        applyModeGeometry(mode)
+        if controls.refreshAll then controls.refreshAll() end
+        if controls.saveConfig then task.defer(function() controls.saveConfig(true) end) end
+        return
+    end
+
+    local incoming = UI.roots[mode]
+    local incomingScale = UI.scales[mode]
+    applyModeGeometry(mode)
+    local targetScale = incomingScale.Scale
+    local targetPosition = incoming.Position
+    incoming.Visible = true
+    incoming.Rotation = -1.2
+    incomingScale.Scale = targetScale * 0.94
+    incoming.Position = targetPosition + UDim2.fromOffset(0, 8)
+
+    UI.modeTween = TweenService:Create(incomingScale,
+        TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+        { Scale = targetScale })
+    UI.modePositionTween = TweenService:Create(incoming,
+        TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+        { Position = targetPosition, Rotation = 0 })
+    UI.modeTween:Play()
+    UI.modePositionTween:Play()
+
+    if previousMode and UI.roots[previousMode] then
+        local outgoing = UI.roots[previousMode]
+        local outgoingScale = UI.scales[previousMode]
+        local outgoingTargetScale = rootScaleFor(previousMode) * DESIGN_FACTOR[previousMode]
+        local outgoingTargetPosition = outgoing.Position
+        UI.previousModeTween = TweenService:Create(outgoingScale,
+            TweenInfo.new(0.17, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+            { Scale = outgoingTargetScale * 0.975 })
+        UI.previousPositionTween = TweenService:Create(outgoing,
+            TweenInfo.new(0.17, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+            { Position = outgoingTargetPosition + UDim2.fromOffset(0, -4), Rotation = 1.0 })
+        UI.previousRotationTween = nil
+        UI.previousModeTween:Play()
+        UI.previousPositionTween:Play()
+        task.delay(0.18, function()
+            if not guiAlive or UI.modeGeneration ~= generation then return end
+            if previousMode ~= state.mode and UI.roots[previousMode] then
+                UI.roots[previousMode].Visible = false
+                UI.roots[previousMode].Rotation = 0
+                applyModeGeometry(previousMode)
+            end
+        end)
+    end
+    if controls.refreshAll then controls.refreshAll() end
+    if controls.saveConfig then task.delay(0.29, function() if UI.modeGeneration == generation then controls.saveConfig(true) end end) end
+end
+
+local function hideUI()
+    -- Do not disable ScreenGui: that would also disable the only way to restore it.
+    closeModal()
+    UI.contextMenu.Visible = false
+    dragOperation = nil
+    UI.toast.Visible = false
+    state.uiHidden = true
+    for _, root in pairs(UI.roots) do root.Visible = false end
+    UI.restoreButton.Visible = true
+end
+
+local function restoreUI()
+    if not state.uiHidden then return end
+    state.uiHidden = false
+    UI.restoreButton.Visible = true
+    setMode(state.mode or "Full")
+    showToast("Đã hiện lại giao diện")
+end
+UI.restoreButton.Activated:Connect(function()
+    if os.clock() - (floatingMovedAt[UI.restoreButton] or -math.huge) < 0.35 then return end
+    if state.uiHidden then restoreUI() else hideUI() end
+end)
+
+-- The thumbnail is optional; fallback artwork always remains underneath it.
+local function makeCover(parent, track, position, size, z, rounded)
+    local index = 1
+    for i, candidate in ipairs(tracks) do if candidate.Id == track.Id then index = i; break end end
+    local pair = COVER_PAIRS[((index - 1) % #COVER_PAIRS) + 1]
+    local cover = gradientFrame(parent, position, size, pair, rounded or 7, z or 20)
+    cover.Name = "Cover_" .. tostring(track.Id)
+    drawIcon(cover, "vinyl", UDim2.fromOffset(0, 0), UDim2.fromOffset(size.X.Offset, size.Y.Offset), palette.accent, (z or 20) + 2)
+    local image = make("ImageLabel", cover, {
+        Name = "OptionalArtwork", BackgroundTransparency = 1, BorderSizePixel = 0,
+        Position = UDim2.fromScale(0, 0), Size = UDim2.fromScale(1, 1),
+        Image = "rbxthumb://type=Asset&id=" .. track.Id .. "&w=150&h=150",
+        ScaleType = Enum.ScaleType.Crop, Visible = true, ZIndex = (z or 20) + 3,
+    })
+    addCorner(image, rounded or 7)
+    -- If the thumbnail is not ready, the fallback remains visible; if it is available, it replaces it.
+    image.ImageTransparency = 0
+    return cover
+end
+
+-- =============================== FULL UI ===============================
+UI.fullHeader = make("Frame", UI.fullRoot, { Position = UDim2.fromOffset(2, 2), Size = UDim2.new(1, -4, 0, 44), BackgroundColor3 = palette.panel, BackgroundTransparency = 0.06, BorderSizePixel = 0, ZIndex = 11, ClipsDescendants = true })
+addCorner(UI.fullHeader, 11)
+registerTheme(UI.fullHeader, "BackgroundColor3", "panel")
+addDropShadow(UI.fullHeader, 3, 8, 0.80)
+UI.fullHeaderLine = make("Frame", UI.fullRoot, { Position = UDim2.fromOffset(2, 45), Size = UDim2.new(1, -4, 0, 1), BackgroundColor3 = palette.border, BorderSizePixel = 0, ZIndex = 12 })
+registerTheme(UI.fullHeaderLine, "BackgroundColor3", "border")
+UI.fullLogo = button(UI.fullHeader, "", UDim2.fromOffset(17, 9), UDim2.fromOffset(25, 26), { bgRole = "selected", textRole = "accent", radius = 7, z = 13 })
+UI.fullLogoIcon = drawIcon(UI.fullLogo, "vinyl", UDim2.fromScale(0, 0), UDim2.fromOffset(25, 26), palette.accent, 15)
+spinVinyl(UI.fullLogoIcon, 3.6)
+UI.fullTitle = label(UI.fullHeader, "DUNGDX MUSIC PLAYER", 12, "text", UDim2.fromOffset(58, 7), UDim2.fromOffset(230, 29), { font = Enum.Font.GothamBold, z = 13, shadow = true })
+-- Window controls follow the requested order: Dynamic playback, compact mode, hide UI.
+local function nameModeButton(btn, objectName, actionName)
+    btn.Name = objectName
+    btn:SetAttribute("UIAction", actionName)
+    btn:SetAttribute("AccessibleLabel", actionName)
+    btn.BackgroundTransparency = 1
+    btn.AutoButtonColor = false
+    return btn
+end
+UI.fullAddTrackButton, UI.fullAddTrackIcon = createIconButton(UI.fullHeader, "plusCircle", UDim2.new(1, -182, 0, 7), UDim2.fromOffset(26, 28), { bgRole = "panel", iconRole = "accent2", radius = 5, z = 14, iconSize = 16 })
+UI.fullAddTrackButton.Name = "AddMyMusicTrack"
+UI.fullAddTrackButton:SetAttribute("AccessibleLabel", "Thêm ID vào Nhạc của tôi")
+UI.fullSettingsButton, UI.fullSettingsIcon = createIconButton(UI.fullHeader, "settings", UDim2.new(1, -149, 0, 7), UDim2.fromOffset(26, 28), { bgRole = "panel", iconRole = "muted", radius = 5, z = 14, iconSize = 16 })
+UI.fullDynamicButton, UI.fullDynamicIcon = createIconButton(UI.fullHeader, "dynamic", UDim2.new(1, -116, 0, 7), UDim2.fromOffset(26, 28), { bgRole = "panel", iconRole = "muted", radius = 5, z = 14, iconSize = 17 })
+UI.fullMiniButton, UI.fullMiniIcon = createIconButton(UI.fullHeader, "window", UDim2.new(1, -83, 0, 7), UDim2.fromOffset(26, 28), { bgRole = "panel", iconRole = "muted", radius = 5, z = 14, iconSize = 16 })
+UI.fullHideButton, UI.fullHideIcon = createIconButton(UI.fullHeader, "close", UDim2.new(1, -50, 0, 7), UDim2.fromOffset(26, 28), { bgRole = "panel", iconRole = "text", radius = 5, z = 14, iconSize = 16 })
+nameModeButton(UI.fullDynamicButton, "SwitchToDynamic", "Chuyển sang dạng phát Dynamic")
+nameModeButton(UI.fullMiniButton, "SwitchToMini", "Chuyển sang dạng thu nhỏ")
+nameModeButton(UI.fullHideButton, "HideUI", "Ẩn giao diện; dùng nút nổi để hiện lại")
+UI.fullMinimize = UI.fullMiniButton -- alias retained for compatibility with existing references
+UI.fullClose = UI.fullHideButton
+UI.fullDrag = make("TextButton", UI.fullHeader, { Name = "DragHandle", Position = UDim2.fromOffset(285, 1), Size = UDim2.new(1, -490, 1, -2), BackgroundTransparency = 1, BorderSizePixel = 0, Text = "⋮⋮", TextSize = 11, TextColor3 = palette.muted, Font = Enum.Font.GothamBold, AutoButtonColor = false, Active = true, ZIndex = 12 })
+
+UI.sidebar = make("Frame", UI.fullRoot, { Position = UDim2.fromOffset(2, 46), Size = UDim2.new(0, 143, 0, 359), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 11 })
+UI.sidebarDivider = make("Frame", UI.fullRoot, { Position = UDim2.fromOffset(150, 47), Size = UDim2.new(0, 1, 0, 358), BackgroundColor3 = palette.border, BorderSizePixel = 0, ZIndex = 12 })
+registerTheme(UI.sidebarDivider, "BackgroundColor3", "border")
+UI.navButtons = {}
+UI.navDefinitions = {
+    { key = "All", text = "Tất Cả", icon = "music" },
+    { key = "Favorites", text = "Yêu Thích", icon = "heart" },
+    { key = "Recent", text = "Gần đây", icon = "clock" },
+    { key = "Mine", text = "Nhạc của tôi", icon = "headphones" },
+}
+for i, item in ipairs(UI.navDefinitions) do
+    local y = 8 + (i - 1) * 28
+    local btn = button(UI.sidebar, "", UDim2.fromOffset(8, y), UDim2.new(1, -16, 0, 26), { bgRole = "panel", textRole = "text", radius = 7, z = 12 })
+    btn.BackgroundTransparency = 1
+    local iconLabel = drawIcon(btn, item.icon, UDim2.fromOffset(8, 0), UDim2.fromOffset(18, 30), palette.muted, 14)
+    local textLabel = label(btn, item.text, 10, "muted", UDim2.fromOffset(34, 0), UDim2.new(1, -40, 1, 0), { z = 14 })
+    UI.navButtons[item.key] = { button = btn, icon = iconLabel, text = textLabel }
+    btn.Activated:Connect(function()
+        state.page = item.key
+        state.genre = nil
+        if controls.refreshAll then controls.refreshAll() end
+        scheduleAutoSave()
+    end)
+end
+UI.sidebarSeparator = make("Frame", UI.sidebar, { Position = UDim2.fromOffset(9, 126), Size = UDim2.new(1, -18, 0, 1), BackgroundColor3 = palette.border, BorderSizePixel = 0, ZIndex = 12 })
+registerTheme(UI.sidebarSeparator, "BackgroundColor3", "border")
+label(UI.sidebar, "Thể loại", 10, "text", UDim2.fromOffset(17, 130), UDim2.new(1, -25, 0, 17), { font = Enum.Font.GothamSemibold, z = 13 })
+UI.sideGenreButtons = {}
+UI.sideGenreIcon = { ["V-Pop"] = "crown", ["Rap / Hip-hop"] = "headphones", EDM = "pulse", Lofi = "spark", Remix = "shuffle", ["Khác"] = "plusCircle" }
+for i, genre in ipairs(GENRES) do
+    local y = 154 + (i - 1) * 28
+    local btn = button(UI.sidebar, "", UDim2.fromOffset(8, y), UDim2.new(1, -16, 0, 25), { bgRole = "panel", textRole = "muted", radius = 5, z = 12 })
+    btn.BackgroundTransparency = 1
+    local iconText = drawIcon(btn, UI.sideGenreIcon[genre] or "diamond", UDim2.fromOffset(8, 0), UDim2.fromOffset(18, 25), GENRE_COLORS[genre], 14)
+    local titleText = label(btn, genre, 9, "muted", UDim2.fromOffset(34, 0), UDim2.new(1, -38, 1, 0), { z = 14 })
+    UI.sideGenreButtons[genre] = { button = btn, icon = iconText, text = titleText }
+    btn.Activated:Connect(function()
+        state.page = "Genre"
+        state.genre = genre
+        if controls.refreshAll then controls.refreshAll() end
+    end)
+end
+
+UI.fullSearch = make("TextBox", UI.fullRoot, {
+    Position = UDim2.fromOffset(168, 47), Size = UDim2.new(1, -189, 0, 32),
+    BackgroundColor3 = palette.deep, BorderSizePixel = 0, ClearTextOnFocus = false,
+    Font = Enum.Font.Gotham, Text = "", PlaceholderText = "Tìm tên bài hát hoặc ID...",
+    PlaceholderColor3 = palette.muted, TextColor3 = palette.text, TextSize = 10,
+    TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 13,
+})
+addCorner(UI.fullSearch, 9)
+local fullSearchStroke = addStroke(UI.fullSearch, palette.border, 1.1, 0, false)
+registerTheme(fullSearchStroke, "Color", "border")
+make("UIPadding", UI.fullSearch, { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 36) })
+registerTheme(UI.fullSearch, "BackgroundColor3", "deep"); registerTheme(UI.fullSearch, "TextColor3", "text"); registerTheme(UI.fullSearch, "PlaceholderColor3", "muted")
+createMagnifier(UI.fullRoot, UDim2.new(1, -50, 0, 55), UDim2.fromOffset(17, 17), palette.muted, 15)
+
+UI.fullList = make("ScrollingFrame", UI.fullRoot, {
+    Name = "TrackList", Position = UDim2.fromOffset(168, 83), Size = UDim2.new(1, -195, 0, 307),
+    BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+    ScrollBarImageColor3 = palette.accent, ScrollBarImageTransparency = 0.05,
+    CanvasSize = UDim2.fromOffset(0, 0), AutomaticCanvasSize = Enum.AutomaticSize.None,
+    ScrollingDirection = Enum.ScrollingDirection.Y, ClipsDescendants = true, ZIndex = 12,
+})
+registerTheme(UI.fullList, "ScrollBarImageColor3", "accent")
+UI.fullLayout = make("UIListLayout", UI.fullList, { FillDirection = Enum.FillDirection.Vertical, HorizontalAlignment = Enum.HorizontalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 0) })
+UI.fullEmpty = label(UI.fullRoot, "Chưa có bài trong danh sách", 10, "muted", UDim2.fromOffset(168, 206), UDim2.new(1, -195, 0, 28), { align = Enum.TextXAlignment.Center, z = 30 })
+UI.fullEmpty.Visible = false
+
+UI.playerPanel = make("Frame", UI.fullRoot, { Position = UDim2.fromOffset(2, 405), Size = UDim2.new(1, -4, 1, -407), BackgroundColor3 = palette.deep, BackgroundTransparency = 0.04, BorderSizePixel = 0, ZIndex = 12, ClipsDescendants = true })
+addCorner(UI.playerPanel, 11)
+registerTheme(UI.playerPanel, "BackgroundColor3", "deep")
+addDropShadow(UI.playerPanel, 4, 10, 0.78)
+UI.playerTopLine = make("Frame", UI.playerPanel, { Position = UDim2.fromOffset(0, 0), Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = palette.border, BorderSizePixel = 0, ZIndex = 13 })
+registerTheme(UI.playerTopLine, "BackgroundColor3", "border")
+
+-- Build a genuinely circular, amplitude-reactive waveform around the requested center artwork.
+-- Separate layer sizes allow it to remain visible in Full and Mini player modes as well as Dynamic.
+local function createCircularWaveLayer(parent, name, size, barCount, radius, centerSize, z, ownerRoot)
+    local layer = make("Frame", parent, {
+        Name = name, Position = UDim2.fromScale(0, 0), Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true,
+        Visible = false, ZIndex = z or 18,
+    })
+    -- ⭐ UPGRADE: WaveformPulseRing — a subtle outer ring frames the waveform.
+    local pulseRing = make("Frame", layer, {
+        Name = name .. "PulseRing", AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(1, -2, 1, -2),
+        BackgroundTransparency = 1, BorderSizePixel = 0, Active = false, ZIndex = (z or 18) + 1,
+    })
+    addCorner(pulseRing, math.floor(size / 2))
+    local pulseStroke = addStroke(pulseRing, palette.accent, size >= 100 and 1.5 or 1, 0.64, true)
+    table.insert(UI.wavePulseRings, { frame = pulseRing, stroke = pulseStroke, phase = size * 0.03, layer = layer, root = ownerRoot })
+
+    -- The geometry stays inside the circular safe radius; no bars can spread into neighbouring UI.
+    local lineWidth = size >= 100 and 3.5 or (size >= 50 and 2.6 or 2.0)
+    local minHeight = size >= 100 and 4.5 or (size >= 50 and 3.2 or 2.4)
+    local maxHeight = size >= 100 and 32 or (size >= 50 and 14 or 8.5)
+    for i = 1, barCount do
+        local angle = (i - 1) * (360 / barCount)
+        local rad = math.rad(angle)
+        local cx, cy = size / 2 + math.cos(rad) * radius, size / 2 + math.sin(rad) * radius
+        local role = (i % 3 == 0) and "accent2" or "accent"
+        local halo = make("Frame", layer, {
+            Name = name .. "Glow" .. i, AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromOffset(cx, cy), Size = UDim2.fromOffset(lineWidth + 4, minHeight + 4),
+            Rotation = angle + 90, BackgroundColor3 = palette[role], BackgroundTransparency = 0.72,
+            BorderSizePixel = 0, ZIndex = (z or 18) + 1,
+        })
+        addCorner(halo, math.max(1, lineWidth + 1))
+        registerTheme(halo, "BackgroundColor3", role)
+        local bar = make("Frame", layer, {
+            Name = name .. "Bar" .. i, AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromOffset(cx, cy), Size = UDim2.fromOffset(lineWidth, minHeight),
+            Rotation = angle + 90, BackgroundColor3 = palette[role], BackgroundTransparency = 0.015,
+            BorderSizePixel = 0, ZIndex = (z or 18) + 2,
+        })
+        addCorner(bar, math.max(1, lineWidth))
+        registerTheme(bar, "BackgroundColor3", role)
+        -- ⭐ UPGRADE: WaveformGradientBar — brighter edge-to-edge color on each animated bar.
+        local barGradient = make("UIGradient", bar, {
+            Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, palette.text),
+                ColorSequenceKeypoint.new(0.52, palette.accent),
+                ColorSequenceKeypoint.new(1, palette.accent2),
+            }), Rotation = 90,
+            Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 0.32) }),
+        })
+        table.insert(accentGradients, barGradient)
+        table.insert(UI.circularWaveBars, {
+            object = bar, halo = halo, angle = angle, cx = cx, cy = cy, role = role,
+            baseHeight = minHeight, maxHeight = maxHeight, width = lineWidth,
+            phase = i * 0.79 + size * 0.031, amplitude = 0.7 + (i % 5) * 0.12, layer = layer, root = ownerRoot,
+        })
+    end
+
+    local artwork = make("Frame", layer, {
+        Name = name .. "Center", AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(centerSize, centerSize),
+        BackgroundColor3 = palette.surface, BorderSizePixel = 0, ClipsDescendants = true,
+        ZIndex = (z or 18) + 4,
+    })
+    addCorner(artwork, centerSize / 2)
+    registerTheme(artwork, "BackgroundColor3", "surface")
+    local edge = addStroke(artwork, palette.accent, size >= 100 and 1.4 or 1, 0.05, true)
+    registerTheme(edge, "Color", "accent")
+    local image = make("ImageLabel", artwork, {
+        Name = "RequestedCenterArtwork84552655718654", Position = UDim2.fromScale(0, 0),
+        Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0,
+        Image = "rbxassetid://84552655718654", ScaleType = Enum.ScaleType.Crop,
+        Visible = true, ZIndex = (z or 18) + 5,
+    })
+    addCorner(image, centerSize / 2)
+    local fallback = drawIcon(artwork, "pulse", UDim2.fromScale(0, 0), UDim2.fromScale(1, 1), palette.accent, (z or 18) + 6)
+    fallback.Visible = not image.IsLoaded
+    image:GetPropertyChangedSignal("IsLoaded"):Connect(function()
+        if image.Parent then fallback.Visible = not image.IsLoaded end
+    end)
+    table.insert(UI.waveArtworkRoots, artwork)
+    return { layer = layer, artwork = artwork, image = image, fallback = fallback, pulseRing = pulseRing, pulseStroke = pulseStroke }
+end
+
+UI.fullCover = make("Frame", UI.playerPanel, { Position = UDim2.fromOffset(17, 16), Size = UDim2.fromOffset(58, 58), BackgroundColor3 = palette.surface, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 14 })
+UI.fullCoverCorner = addCorner(UI.fullCover, 8)
+make("UIGradient", UI.fullCover, { Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, COVER_PAIRS[3][1]), ColorSequenceKeypoint.new(1, COVER_PAIRS[3][2]) }), Rotation = 25 })
+UI.fullCoverGlyph = drawIcon(UI.fullCover, "vinyl", UDim2.fromOffset(0, 0), UDim2.fromOffset(58, 58), palette.accent, 15)
+spinVinyl(UI.fullCoverGlyph, 3.0)
+UI.fullCoverImage = make("ImageLabel", UI.fullCover, { BackgroundTransparency = 1, BorderSizePixel = 0, Size = UDim2.fromScale(1, 1), Position = UDim2.fromScale(0, 0), ScaleType = Enum.ScaleType.Crop, Image = "", Visible = false, ZIndex = 16 })
+addCorner(UI.fullCoverImage, 7)
+UI.fullWave = createCircularWaveLayer(UI.fullCover, "FullCircularWaveform", 58, 28, 21.2, 30, 18, UI.fullRoot)
+UI.fullPlayingDiscBadge = createPlayingDiscBadge(UI.fullCover, UDim2.new(1, -21, 1, -21), 19, 24)
+UI.fullTrackTitle = label(UI.playerPanel, "2 Phút Hơn", 11, "text", UDim2.fromOffset(88, 14), UDim2.new(0, 158, 0, 19), { font = Enum.Font.GothamBold, truncate = true, z = 15, shadow = true })
+UI.fullTrackId = label(UI.playerPanel, "78534559289195", 8, "muted", UDim2.fromOffset(88, 36), UDim2.new(0, 158, 0, 14), { truncate = true, z = 15 })
+UI.fullShuffle, UI.fullShuffleIcon = createIconButton(UI.playerPanel, "shuffle", UDim2.fromOffset(259, 17), UDim2.fromOffset(25, 26), { bgRole = "deep", textRole = "muted", radius = 6, z = 15 })
+UI.fullPrev = createTransportButton(UI.playerPanel, "previous", UDim2.fromOffset(300, 17), UDim2.fromOffset(25, 26), { bgRole = "deep", textRole = "text", radius = 6, z = 15 })
+UI.fullPlay, UI.fullPlayGlyph, UI.fullPauseIcon = createPlayPauseButton(UI.playerPanel, UDim2.fromOffset(352, 11), UDim2.fromOffset(42, 42), { bgRole = "selected", textRole = "text", radius = 12, stroke = true, strokeRole = "accent", strokeWidth = 1.7, gradientStroke = true, gradientFill = true, z = 16 })
+addStroke(UI.fullPlay, palette.accent, 4, 0.86, true)
+UI.fullNext = createTransportButton(UI.playerPanel, "next", UDim2.fromOffset(411, 17), UDim2.fromOffset(25, 26), { bgRole = "deep", textRole = "text", radius = 6, z = 15 })
+UI.fullRepeat, UI.fullRepeatIcon = createIconButton(UI.playerPanel, "repeat", UDim2.fromOffset(454, 17), UDim2.fromOffset(25, 26), { bgRole = "deep", textRole = "muted", radius = 6, z = 15 })
+UI.fullSeekTrack = button(UI.playerPanel, "", UDim2.fromOffset(87, 59), UDim2.new(0, 406, 0, 14), { bgRole = "deep", textRole = "text", radius = 5, z = 14, noMotion = true })
+UI.fullSeekTrack.BackgroundTransparency = 1
+UI.fullSeekRail = make("Frame", UI.fullSeekTrack, { Position = UDim2.new(0, 0, 0.5, -2), Size = UDim2.new(1, 0, 0, 4), BackgroundColor3 = palette.border, BorderSizePixel = 0, ZIndex = 15 })
+addCorner(UI.fullSeekRail, 4); registerTheme(UI.fullSeekRail, "BackgroundColor3", "border")
+UI.fullSeekFill = make("Frame", UI.fullSeekRail, { Size = UDim2.new(state.progress / 216, 0, 1, 0), BackgroundColor3 = palette.accent, BorderSizePixel = 0, ZIndex = 16 })
+addCorner(UI.fullSeekFill, 4); registerTheme(UI.fullSeekFill, "BackgroundColor3", "accent")
+UI.fullSeekKnob = make("Frame", UI.fullSeekRail, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(state.progress / 216, 0, 0.5, 0), Size = UDim2.fromOffset(8, 8), BackgroundColor3 = palette.text, BorderSizePixel = 0, ZIndex = 17 })
+addCorner(UI.fullSeekKnob, 5); registerTheme(UI.fullSeekKnob, "BackgroundColor3", "text")
+UI.fullCurrentTime = label(UI.playerPanel, "01:42", 7, "muted", UDim2.fromOffset(87, 73), UDim2.fromOffset(42, 10), { z = 15 })
+UI.fullTotalTime = label(UI.playerPanel, "03:36", 7, "muted", UDim2.fromOffset(450, 73), UDim2.fromOffset(43, 10), { align = Enum.TextXAlignment.Right, z = 15 })
+UI.fullVolumeIcon, UI.fullVolumeGlyph = createSpeakerButton(UI.playerPanel, UDim2.fromOffset(553, 24), UDim2.fromOffset(25, 20), { bgRole = "deep", textRole = "muted", radius = 4, z = 15 })
+UI.fullVolumeTrack = button(UI.playerPanel, "", UDim2.fromOffset(581, 24), UDim2.fromOffset(86, 18), { bgRole = "deep", textRole = "text", radius = 3, z = 14, noMotion = true })
+UI.fullVolumeTrack.BackgroundTransparency = 1
+UI.fullVolumeRail = make("Frame", UI.fullVolumeTrack, { Position = UDim2.new(0, 0, 0.5, -2), Size = UDim2.new(1, 0, 0, 4), BackgroundColor3 = palette.border, BorderSizePixel = 0, ZIndex = 15 })
+addCorner(UI.fullVolumeRail, 3); registerTheme(UI.fullVolumeRail, "BackgroundColor3", "border")
+UI.fullVolumeFill = make("Frame", UI.fullVolumeRail, { Size = UDim2.new(state.musicVolume / 100, 0, 1, 0), BackgroundColor3 = palette.accent, BorderSizePixel = 0, ZIndex = 16 })
+addCorner(UI.fullVolumeFill, 3); registerTheme(UI.fullVolumeFill, "BackgroundColor3", "accent")
+UI.fullVolumeKnob = make("Frame", UI.fullVolumeRail, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(state.musicVolume / 100, 0, 0.5, 0), Size = UDim2.fromOffset(8, 8), BackgroundColor3 = palette.text, BorderSizePixel = 0, ZIndex = 17 })
+addCorner(UI.fullVolumeKnob, 5); registerTheme(UI.fullVolumeKnob, "BackgroundColor3", "text")
+UI.fullVolumePct = label(UI.playerPanel, "70%", 8, "text", UDim2.fromOffset(669, 23), UDim2.fromOffset(31, 19), { align = Enum.TextXAlignment.Right, z = 15 })
+
+-- =============================== MINI UI ===============================
+UI.miniPlayerCard = make("Frame", UI.miniRoot, { Position = UDim2.fromOffset(12, 10), Size = UDim2.new(1, -24, 0, 64), BackgroundColor3 = palette.panel, BorderSizePixel = 0, ZIndex = 12, ClipsDescendants = true })
+addCorner(UI.miniPlayerCard, 11); addStroke(UI.miniPlayerCard, palette.accent, 1.3, 0, true); registerTheme(UI.miniPlayerCard, "BackgroundColor3", "panel")
+addDropShadow(UI.miniPlayerCard, 4, 9, 0.78)
+UI.miniCover = make("Frame", UI.miniPlayerCard, { Position = UDim2.fromOffset(8, 10), Size = UDim2.fromOffset(40, 40), BackgroundColor3 = palette.surface, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 14 })
+addCorner(UI.miniCover, 8)
+make("UIGradient", UI.miniCover, { Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, COVER_PAIRS[3][1]), ColorSequenceKeypoint.new(1, COVER_PAIRS[3][2]) }), Rotation = 25 })
+UI.miniCoverGlyph = drawIcon(UI.miniCover, "vinyl", UDim2.fromOffset(0, 0), UDim2.fromOffset(40, 40), palette.accent, 15)
+spinVinyl(UI.miniCoverGlyph, 3.0)
+UI.miniCoverImage = make("ImageLabel", UI.miniCover, { BackgroundTransparency = 1, BorderSizePixel = 0, Size = UDim2.fromScale(1, 1), Position = UDim2.fromScale(0, 0), Image = "", ScaleType = Enum.ScaleType.Crop, Visible = false, ZIndex = 16 })
+addCorner(UI.miniCoverImage, 7)
+UI.miniWave = createCircularWaveLayer(UI.miniCover, "MiniCircularWaveform", 40, 24, 14.3, 20, 18, UI.miniRoot)
+UI.miniPlayingDiscBadge = createPlayingDiscBadge(UI.miniCover, UDim2.new(1, -17, 1, -17), 15, 24)
+UI.miniTrackTitle = label(UI.miniPlayerCard, "2 Phút Hơn", 9, "text", UDim2.fromOffset(62, 11), UDim2.fromOffset(89, 15), { font = Enum.Font.GothamSemibold, truncate = true, z = 15 })
+UI.miniTrackId = label(UI.miniPlayerCard, "78534559289195", 6, "muted", UDim2.fromOffset(62, 28), UDim2.fromOffset(89, 12), { truncate = true, z = 15 })
+UI.miniPrev = createTransportButton(UI.miniPlayerCard, "previous", UDim2.fromOffset(154, 10), UDim2.fromOffset(20, 24), { bgRole = "panel", textRole = "text", radius = 5, z = 15 })
+UI.miniPlay, UI.miniPlayGlyph, UI.miniPauseIcon = createPlayPauseButton(UI.miniPlayerCard, UDim2.fromOffset(177, 8), UDim2.fromOffset(27, 27), { bgRole = "selected", textRole = "text", radius = 7, gradientFill = true, z = 15 })
+UI.miniNext = createTransportButton(UI.miniPlayerCard, "next", UDim2.fromOffset(207, 10), UDim2.fromOffset(20, 24), { bgRole = "panel", textRole = "text", radius = 5, z = 15 })
+UI.miniSettingsButton, UI.miniSettingsIcon = createIconButton(UI.miniPlayerCard, "settings", UDim2.new(1, -92, 0, 8), UDim2.fromOffset(20, 21), { bgRole = "panel", iconRole = "muted", radius = 4, z = 16, iconSize = 13 })
+UI.miniDynamicButton, UI.miniDynamicIcon = createIconButton(UI.miniPlayerCard, "dynamic", UDim2.new(1, -69, 0, 8), UDim2.fromOffset(20, 21), { bgRole = "panel", iconRole = "muted", radius = 4, z = 16, iconSize = 14 })
+UI.miniModeButton, UI.miniModeIcon = createIconButton(UI.miniPlayerCard, "window", UDim2.new(1, -46, 0, 8), UDim2.fromOffset(20, 21), { bgRole = "panel", iconRole = "muted", radius = 4, z = 16, iconSize = 13 })
+UI.miniHideButton, UI.miniHideIcon = createIconButton(UI.miniPlayerCard, "close", UDim2.new(1, -23, 0, 8), UDim2.fromOffset(20, 21), { bgRole = "panel", iconRole = "text", radius = 4, z = 16, iconSize = 13 })
+nameModeButton(UI.miniDynamicButton, "MiniSwitchToDynamic", "Chuyển sang dạng phát Dynamic")
+nameModeButton(UI.miniModeButton, "MiniRestoreFull", "Mở giao diện đầy đủ")
+nameModeButton(UI.miniHideButton, "MiniHideUI", "Ẩn giao diện; dùng nút nổi để hiện lại")
+UI.miniBackgroundButton = UI.miniDynamicButton -- alias retained for the old connection point
+UI.miniSeekTrack = button(UI.miniPlayerCard, "", UDim2.fromOffset(62, 47), UDim2.fromOffset(133, 12), { bgRole = "panel", textRole = "text", radius = 4, z = 14, noMotion = true })
+UI.miniSeekTrack.BackgroundTransparency = 1
+UI.miniSeekRail = make("Frame", UI.miniSeekTrack, { Position = UDim2.new(0, 0, 0.5, -2), Size = UDim2.new(1, 0, 0, 4), BackgroundColor3 = palette.border, BorderSizePixel = 0, ZIndex = 15 })
+addCorner(UI.miniSeekRail, 4); registerTheme(UI.miniSeekRail, "BackgroundColor3", "border")
+UI.miniSeekFill = make("Frame", UI.miniSeekRail, { Size = UDim2.new(state.progress / 216, 0, 1, 0), BackgroundColor3 = palette.accent, BorderSizePixel = 0, ZIndex = 16 })
+addCorner(UI.miniSeekFill, 4); registerTheme(UI.miniSeekFill, "BackgroundColor3", "accent")
+UI.miniVolumeIcon, UI.miniVolumeGlyph = createSpeakerButton(UI.miniPlayerCard, UDim2.fromOffset(202, 42), UDim2.fromOffset(17, 15), { bgRole = "panel", textRole = "muted", radius = 4, z = 15 })
+UI.miniVolumeTrack = button(UI.miniPlayerCard, "", UDim2.fromOffset(223, 45), UDim2.fromOffset(57, 12), { bgRole = "panel", textRole = "text", radius = 3, z = 14, noMotion = true })
+UI.miniVolumeTrack.BackgroundTransparency = 1
+UI.miniVolumeRail = make("Frame", UI.miniVolumeTrack, { Position = UDim2.new(0, 0, 0.5, -2), Size = UDim2.new(1, 0, 0, 4), BackgroundColor3 = palette.border, BorderSizePixel = 0, ZIndex = 15 })
+addCorner(UI.miniVolumeRail, 4); registerTheme(UI.miniVolumeRail, "BackgroundColor3", "border")
+UI.miniVolumeFill = make("Frame", UI.miniVolumeRail, { Size = UDim2.new(state.musicVolume / 100, 0, 1, 0), BackgroundColor3 = palette.accent, BorderSizePixel = 0, ZIndex = 16 })
+addCorner(UI.miniVolumeFill, 4); registerTheme(UI.miniVolumeFill, "BackgroundColor3", "accent")
+UI.miniVolumeKnob = make("Frame", UI.miniVolumeRail, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(state.musicVolume / 100, 0, 0.5, 0), Size = UDim2.fromOffset(7, 7), BackgroundColor3 = palette.text, BorderSizePixel = 0, ZIndex = 17 })
+addCorner(UI.miniVolumeKnob, 5); registerTheme(UI.miniVolumeKnob, "BackgroundColor3", "text")
+UI.miniVolumePct = label(UI.miniPlayerCard, "70%", 6, "text", UDim2.new(1, -39, 0, 43), UDim2.fromOffset(24, 11), { align = Enum.TextXAlignment.Right, z = 15 })
+UI.miniSearchLabel = label(UI.miniRoot, "Tìm kiếm", 10, "accent", UDim2.fromOffset(31, 82), UDim2.new(1, -45, 0, 18), { font = Enum.Font.GothamSemibold, z = 13 })
+createMagnifier(UI.miniRoot, UDim2.fromOffset(14, 84), UDim2.fromOffset(14, 14), palette.accent, 14)
+UI.miniSearch = make("TextBox", UI.miniRoot, {
+    Position = UDim2.fromOffset(13, 108), Size = UDim2.new(1, -26, 0, 37),
+    BackgroundColor3 = palette.deep, BorderSizePixel = 0, ClearTextOnFocus = false,
+    Font = Enum.Font.Gotham, Text = "2 phút", PlaceholderText = "Tìm tên bài hoặc ID...",
+    PlaceholderColor3 = palette.muted, TextColor3 = palette.text, TextSize = 10,
+    TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 13,
+})
+addCorner(UI.miniSearch, 9)
+local miniSearchStroke = addStroke(UI.miniSearch, palette.accent, 1.1, 0, true)
+registerTheme(miniSearchStroke, "Color", "accent")
+make("UIPadding", UI.miniSearch, { PaddingLeft = UDim.new(0, 34), PaddingRight = UDim.new(0, 34) })
+registerTheme(UI.miniSearch, "BackgroundColor3", "deep"); registerTheme(UI.miniSearch, "TextColor3", "text"); registerTheme(UI.miniSearch, "PlaceholderColor3", "muted")
+createMagnifier(UI.miniRoot, UDim2.fromOffset(21, 118), UDim2.fromOffset(16, 16), palette.muted, 15)
+UI.miniSearchClear, UI.miniSearchClearIcon = createIconButton(UI.miniRoot, "close", UDim2.new(1, -39, 0, 111), UDim2.fromOffset(22, 30), { bgRole = "deep", iconRole = "muted", radius = 6, z = 16, iconSize = 12 })
+UI.miniListBorder = make("Frame", UI.miniRoot, { Position = UDim2.fromOffset(12, 151), Size = UDim2.new(1, -24, 0, 145), BackgroundColor3 = palette.accent, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 12 })
+addCorner(UI.miniListBorder, 11)
+table.insert(accentGradients, make("UIGradient", UI.miniListBorder, { Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, palette.accent), ColorSequenceKeypoint.new(1, palette.accent2) }), Rotation = 0 }))
+UI.miniListHeading = label(UI.miniListBorder, "Đang phát gần đây", 9, "text", UDim2.fromOffset(8, 2), UDim2.new(1, -16, 0, 17), { font = Enum.Font.GothamSemibold, z = 14 })
+UI.miniList = make("ScrollingFrame", UI.miniListBorder, {
+    Position = UDim2.fromOffset(1, 21), Size = UDim2.new(1, -2, 1, -22),
+    BackgroundColor3 = palette.bg, BorderSizePixel = 0, ScrollBarThickness = 3,
+    ScrollBarImageColor3 = palette.accent, CanvasSize = UDim2.fromOffset(0, 0), AutomaticCanvasSize = Enum.AutomaticSize.None,
+    ScrollingDirection = Enum.ScrollingDirection.Y, ClipsDescendants = true, ZIndex = 13,
+})
+addCorner(UI.miniList, 8); registerTheme(UI.miniList, "BackgroundColor3", "bg"); registerTheme(UI.miniList, "ScrollBarImageColor3", "accent")
+UI.miniListLayout = make("UIListLayout", UI.miniList, { FillDirection = Enum.FillDirection.Vertical, HorizontalAlignment = Enum.HorizontalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 0) })
+UI.miniEmpty = label(UI.miniRoot, "Không tìm thấy bài phù hợp", 9, "muted", UDim2.fromOffset(18, 216), UDim2.new(1, -36, 0, 24), { align = Enum.TextXAlignment.Center, z = 30 })
+UI.miniEmpty.Visible = false
+UI.miniGenreBorder = make("Frame", UI.miniRoot, { Position = UDim2.fromOffset(12, 300), Size = UDim2.new(1, -24, 0, 122), BackgroundColor3 = palette.accent, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 12 })
+addCorner(UI.miniGenreBorder, 11)
+table.insert(accentGradients, make("UIGradient", UI.miniGenreBorder, { Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, palette.accent), ColorSequenceKeypoint.new(1, palette.accent2) }), Rotation = 0 }))
+UI.miniGenrePanel = make("Frame", UI.miniGenreBorder, { Position = UDim2.fromOffset(1, 1), Size = UDim2.new(1, -2, 1, -2), BackgroundColor3 = palette.bg, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 13 })
+addCorner(UI.miniGenrePanel, 10); registerTheme(UI.miniGenrePanel, "BackgroundColor3", "bg")
+label(UI.miniGenrePanel, "+ Danh sách thể loại", 10, "text", UDim2.fromOffset(4, 3), UDim2.new(1, -9, 0, 18), { font = Enum.Font.GothamSemibold, z = 14 })
+UI.miniGenreButtons = {}
+UI.shortGenreNames = { ["V-Pop"] = "V-Pop", ["Rap / Hip-hop"] = "Rap / Hip-hop", EDM = "EDM", Lofi = "Lofi", Remix = "Remix", ["Khác"] = "Khác" }
+UI.genrePositions = {
+    ["V-Pop"] = { 10, 24 }, ["Rap / Hip-hop"] = { 168, 24 },
+    EDM = { 10, 56 }, Lofi = { 168, 56 },
+    Remix = { 10, 88 }, ["Khác"] = { 168, 88 },
+}
+for _, genre in ipairs(GENRES) do
+    local p = UI.genrePositions[genre]
+    local color = GENRE_COLORS[genre]
+    local btn = button(UI.miniGenrePanel, "", UDim2.fromOffset(p[1], p[2]), UDim2.fromOffset(146, 28), { bgRole = "surface", textRole = "text", radius = 9, stroke = true, strokeWidth = 1.1, z = 14 })
+    btn.BackgroundColor3 = Color3.fromRGB(math.floor(color.R * 30), math.floor(color.G * 24), math.floor(color.B * 28))
+    local stroke = btn:FindFirstChildOfClass("UIStroke")
+    if stroke then stroke.Color = color end
+    local icon = drawIcon(btn, UI.sideGenreIcon[genre] or "plusCircle", UDim2.fromOffset(8, 0), UDim2.fromOffset(22, 28), color, 16)
+    label(btn, UI.shortGenreNames[genre], 9, "text", UDim2.fromOffset(34, 0), UDim2.new(1, -39, 1, 0), { z = 16 })
+    UI.miniGenreButtons[genre] = { button = btn, icon = icon, color = color }
+    btn.Activated:Connect(function()
+        state.miniGenre = (state.miniGenre == genre) and nil or genre
+        state.miniQuery = ""
+        UI.miniSearch.Text = ""
+        if controls.refreshAll then controls.refreshAll() end
+    end)
+end
+
+-- ============================ DYNAMIC UI ============================
+-- Tall dynamic player matching the latest concept board: cover disc, clear controls,
+-- separate music/game levels, and an explicit three-action mode strip.
+UI.bgHeader = make("Frame", UI.bgRoot, {
+    Position = UDim2.fromOffset(2, 2), Size = UDim2.new(1, -4, 0, 40),
+    BackgroundColor3 = palette.panel, BorderSizePixel = 0, ZIndex = 12, ClipsDescendants = true,
+})
+addCorner(UI.bgHeader, 12)
+registerTheme(UI.bgHeader, "BackgroundColor3", "panel")
+UI.bgLogo = drawIcon(UI.bgHeader, "vinyl", UDim2.fromOffset(10, 3), UDim2.fromOffset(28, 31), palette.accent, 14)
+spinVinyl(UI.bgLogo, 3.6)
+UI.bgTitle = label(UI.bgHeader, "DUNGDX MUSIC", 11, "text", UDim2.fromOffset(43, 0), UDim2.new(1, -110, 1, 0), { font = Enum.Font.GothamBold, truncate = true, z = 14 })
+UI.bgSettingsButton, UI.bgSettingsIcon = createIconButton(UI.bgHeader, "settings", UDim2.new(1, -96, 0, 7), UDim2.fromOffset(25, 25), { bgRole = "surface", iconRole = "muted", radius = 7, z = 15, iconSize = 13 })
+UI.bgMenuButton = createDotsButton(UI.bgHeader, UDim2.new(1, -65, 0, 7), UDim2.fromOffset(25, 25), { bgRole = "surface", textRole = "text", radius = 7, z = 15 }, true)
+UI.bgCloseButton, UI.bgCloseIcon = createIconButton(UI.bgHeader, "close", UDim2.new(1, -34, 0, 7), UDim2.fromOffset(25, 25), { bgRole = "surface", iconRole = "text", radius = 7, z = 15, iconSize = 13 })
+
+UI.bgTrackTitle = label(UI.bgRoot, "2 Phút Hơn", 14, "text", UDim2.fromOffset(20, 45), UDim2.new(1, -40, 0, 22), { font = Enum.Font.GothamBold, align = Enum.TextXAlignment.Center, truncate = true, z = 14, shadow = true })
+UI.bgTrackId = label(UI.bgRoot, "78534559289195", 9, "muted", UDim2.fromOffset(20, 67), UDim2.new(1, -40, 0, 16), { align = Enum.TextXAlignment.Center, truncate = true, z = 14 })
+
+-- Decorative halo around the vinyl. The vector-drawn record rotates only while the music Sound is playing.
+UI.bgRecordHalo = make("Frame", UI.bgRoot, {
+    Name = "DynamicRecordHalo", Position = UDim2.fromOffset(55, 86), Size = UDim2.fromOffset(176, 176),
+    BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 12,
+})
+addCorner(UI.bgRecordHalo, 88)
+local bgHaloStroke = addStroke(UI.bgRecordHalo, palette.accent, 1.45, 0.06, true)
+registerTheme(bgHaloStroke, "Color", "accent")
+UI.bgRecordIcon = drawIcon(UI.bgRoot, "vinyl", UDim2.fromOffset(63, 94), UDim2.fromOffset(160, 160), palette.accent, 16)
+spinVinyl(UI.bgRecordIcon, 2.6)
+local bgRecordDisc = UI.bgRecordIcon:FindFirstChild("VinylRecord", true)
+UI.bgRecordImage = nil
+if bgRecordDisc then
+    UI.bgRecordImage = make("ImageLabel", bgRecordDisc, {
+        Name = "DynamicRecordArtwork", Position = UDim2.fromScale(0.34, 0.34), Size = UDim2.fromScale(0.32, 0.32),
+        BackgroundTransparency = 1, BorderSizePixel = 0,
+        Image = "", ScaleType = Enum.ScaleType.Crop, Visible = false, ZIndex = bgRecordDisc.ZIndex + 3,
+    })
+    make("UICorner", UI.bgRecordImage, { CornerRadius = UDim.new(0.5, 0) })
+end
+-- Tiny cyan/violet bars frame the platter without overlapping the record or controls.
+UI.bgWaveBars = {}
+for i, height in ipairs({ 11, 19, 28, 21, 14 }) do
+    local leftBar = make("Frame", UI.bgRoot, {
+        Name = "DynamicWaveLeft" .. i, Position = UDim2.fromOffset(21 + (i - 1) * 6, 167 - height / 2),
+        Size = UDim2.fromOffset(3, height), BackgroundColor3 = (i % 2 == 0) and palette.accent2 or palette.accent,
+        BackgroundTransparency = 0.12, BorderSizePixel = 0, ZIndex = 14,
+    })
+    addCorner(leftBar, 2); registerTheme(leftBar, "BackgroundColor3", (i % 2 == 0) and "accent2" or "accent")
+    local rightBar = make("Frame", UI.bgRoot, {
+        Name = "DynamicWaveRight" .. i, Position = UDim2.fromOffset(262 - (i - 1) * 6, 167 - height / 2),
+        Size = UDim2.fromOffset(3, height), BackgroundColor3 = (i % 2 == 0) and palette.accent or palette.accent2,
+        BackgroundTransparency = 0.12, BorderSizePixel = 0, ZIndex = 14,
+    })
+    addCorner(rightBar, 2); registerTheme(rightBar, "BackgroundColor3", (i % 2 == 0) and "accent" or "accent2")
+    table.insert(UI.bgWaveBars, leftBar); table.insert(UI.bgWaveBars, rightBar)
+end
+
+-- Circular waveform mode. The entire visualizer clips to a round canvas, so neither the
+-- image nor the bars can spill into neighbouring controls. PlaybackLoudness drives bar height.
+UI.bgWaveLayer = make("Frame", UI.bgRoot, {
+    Name = "CircularWaveformClip", Position = UDim2.fromOffset(55, 86), Size = UDim2.fromOffset(176, 176),
+    BackgroundTransparency = 1, BorderSizePixel = 0, ClipsDescendants = true, Visible = false, ZIndex = 16,
+})
+addCorner(UI.bgWaveLayer, 88)
+-- ⭐ UPGRADE: DynamicWavePulseRing — pulse edge around the Dynamic artwork.
+local bgPulseRing = make("Frame", UI.bgWaveLayer, {
+    Name = "DynamicWavePulseRing", AnchorPoint = Vector2.new(0.5, 0.5),
+    Position = UDim2.fromOffset(88, 88), Size = UDim2.fromOffset(164, 164),
+    BackgroundTransparency = 1, BorderSizePixel = 0, Active = false, ZIndex = 17,
+})
+addCorner(bgPulseRing, 82)
+local bgPulseStroke = addStroke(bgPulseRing, palette.accent, 1.6, 0.62, true)
+table.insert(UI.wavePulseRings, { frame = bgPulseRing, stroke = bgPulseStroke, phase = 1.7 })
+UI.bgWaveDisc = make("Frame", UI.bgWaveLayer, {
+    Name = "CircularWaveformArtwork", Position = UDim2.fromOffset(39, 39), Size = UDim2.fromOffset(98, 98),
+    BackgroundColor3 = palette.surface, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 18,
+})
+addCorner(UI.bgWaveDisc, 49); registerTheme(UI.bgWaveDisc, "BackgroundColor3", "surface")
+local waveDiscStroke = addStroke(UI.bgWaveDisc, palette.accent, 1.4, 0.02, true)
+registerTheme(waveDiscStroke, "Color", "accent")
+UI.bgWaveImage = make("ImageLabel", UI.bgWaveDisc, {
+    Name = "RequestedCenterArtwork84552655718654", Position = UDim2.fromScale(0, 0), Size = UDim2.fromScale(1, 1),
+    BackgroundTransparency = 1, BorderSizePixel = 0, Image = "rbxassetid://84552655718654",
+    ScaleType = Enum.ScaleType.Crop, Visible = true, ZIndex = 19,
+})
+addCorner(UI.bgWaveImage, 49)
+table.insert(UI.waveArtworkRoots, UI.bgWaveDisc)
+UI.bgWaveFallback = drawIcon(UI.bgWaveDisc, "pulse", UDim2.fromScale(0, 0), UDim2.fromScale(1, 1), palette.accent, 20)
+UI.bgWaveFallback.Visible = not UI.bgWaveImage.IsLoaded
+UI.bgWaveImage:GetPropertyChangedSignal("IsLoaded"):Connect(function()
+    if UI.bgWaveImage.Parent then UI.bgWaveFallback.Visible = not UI.bgWaveImage.IsLoaded end
+end)
+for i = 1, 24 do
+    local angle = (i - 1) * (360 / 24)
+    local radians = math.rad(angle)
+    local cx, cy, radius = 88 + math.cos(radians) * 66, 88 + math.sin(radians) * 66, 66
+    local role = (i % 2 == 0) and "accent2" or "accent"
+    local halo = make("Frame", UI.bgWaveLayer, {
+        Name = "LiveAudioHalo" .. i, AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromOffset(cx, cy), Size = UDim2.fromOffset(7, 8), Rotation = angle + 90,
+        BackgroundColor3 = palette[role], BackgroundTransparency = 0.76, BorderSizePixel = 0, ZIndex = 21,
+    })
+    addCorner(halo, 3.5); registerTheme(halo, "BackgroundColor3", role)
+    local bar = make("Frame", UI.bgWaveLayer, {
+        Name = "LiveAudioBar" .. i, AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromOffset(cx, cy), Size = UDim2.fromOffset(3, 4), Rotation = angle + 90,
+        BackgroundColor3 = palette[role], BackgroundTransparency = 0.04, BorderSizePixel = 0, ZIndex = 22,
+    })
+    addCorner(bar, 2); registerTheme(bar, "BackgroundColor3", role)
+    table.insert(UI.circularWaveBars, { object = bar, halo = halo, angle = angle, cx = cx, cy = cy, role = role, width = 3, baseHeight = 4, maxHeight = 20, phase = i * 0.79, amplitude = 0.9, layer = UI.bgWaveLayer, root = UI.bgRoot })
+end
+
+local function updateVisualizerStyle()
+    local useWave = state.visualizerStyle == "Wave"
+    -- Waveform selection is global: Full, Mini and Dynamic must all render the same style.
+    if UI.fullWave and UI.fullWave.layer then UI.fullWave.layer.Visible = useWave end
+    if UI.miniWave and UI.miniWave.layer then UI.miniWave.layer.Visible = useWave end
+    if UI.bgWaveLayer then UI.bgWaveLayer.Visible = useWave end
+    if UI.fullCoverGlyph then UI.fullCoverGlyph.Visible = not useWave end
+    if UI.miniCoverGlyph then UI.miniCoverGlyph.Visible = not useWave end
+    -- Wave mode uses genuinely circular masks, not a square cover with a circular effect drawn on top.
+    if UI.fullCoverCorner then UI.fullCoverCorner.CornerRadius = useWave and UDim.new(0.5, 0) or UDim.new(0, 8) end
+    if UI.miniCoverCorner then UI.miniCoverCorner.CornerRadius = useWave and UDim.new(0.5, 0) or UDim.new(0, 8) end
+    if UI.fullCoverImage and UI.fullCoverImage.Parent then UI.fullCoverImage.Visible = not useWave and UI.fullCoverImage.IsLoaded end
+    if UI.miniCoverImage and UI.miniCoverImage.Parent then UI.miniCoverImage.Visible = not useWave and UI.miniCoverImage.IsLoaded end
+    if UI.bgRecordIcon then UI.bgRecordIcon.Visible = not useWave end
+    if UI.bgRecordHalo then UI.bgRecordHalo.Visible = not useWave end
+    for _, bar in ipairs(UI.bgWaveBars or {}) do if bar and bar.Parent then bar.Visible = not useWave end end
+    if UI.bgWaveImage and UI.bgWaveImage.Parent then UI.bgWaveFallback.Visible = not UI.bgWaveImage.IsLoaded end
+    syncVinylSpins()
+end
+
+local function hookCoverLoad(image)
+    image:GetPropertyChangedSignal("IsLoaded"):Connect(function()
+        if image.Parent then
+            image.Visible = image.IsLoaded and state.visualizerStyle ~= "Wave"
+        end
+    end)
+end
+
+-- Small artwork tile is retained in the mode strip as a compact track identity cue.
+UI.bgCover = make("Frame", UI.bgRoot, {
+    Name = "DynamicSelectedCover", Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(36, 36),
+    BackgroundColor3 = palette.surface, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 16,
+})
+addCorner(UI.bgCover, 8)
+make("UIGradient", UI.bgCover, { Color = ColorSequence.new({ ColorSequenceKeypoint.new(0, COVER_PAIRS[3][1]), ColorSequenceKeypoint.new(1, COVER_PAIRS[3][2]) }), Rotation = 25 })
+UI.bgCoverGlyph = drawIcon(UI.bgCover, "vinyl", UDim2.fromOffset(0, 0), UDim2.fromOffset(36, 36), palette.accent, 17)
+spinVinyl(UI.bgCoverGlyph, 3.0)
+UI.bgCoverImage = make("ImageLabel", UI.bgCover, { BackgroundTransparency = 1, BorderSizePixel = 0, Size = UDim2.fromScale(1, 1), Position = UDim2.fromScale(0, 0), ScaleType = Enum.ScaleType.Crop, Image = "", Visible = false, ZIndex = 19 })
+addCorner(UI.bgCoverImage, 8)
+UI.bgPlayingDiscBadge = createPlayingDiscBadge(UI.bgCover, UDim2.new(1, -17, 1, -17), 15, 24)
+
+-- Progress bar + time labels.
+UI.bgSeekTrack = button(UI.bgRoot, "", UDim2.fromOffset(23, 265), UDim2.new(1, -46, 0, 15), { bgRole = "deep", textRole = "text", radius = 5, z = 13, noMotion = true })
+UI.bgSeekTrack.BackgroundTransparency = 1
+UI.bgSeekRail = make("Frame", UI.bgSeekTrack, { Position = UDim2.new(0, 0, 0.5, -2.5), Size = UDim2.new(1, 0, 0, 5), BackgroundColor3 = palette.border, BorderSizePixel = 0, ZIndex = 14 })
+addCorner(UI.bgSeekRail, 4); registerTheme(UI.bgSeekRail, "BackgroundColor3", "border")
+UI.bgSeekFill = make("Frame", UI.bgSeekRail, { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = palette.accent, BorderSizePixel = 0, ZIndex = 15 })
+addCorner(UI.bgSeekFill, 4); registerTheme(UI.bgSeekFill, "BackgroundColor3", "accent")
+UI.bgCurrentTime = label(UI.bgRoot, "00:00", 8, "muted", UDim2.fromOffset(23, 280), UDim2.fromOffset(54, 14), { z = 14 })
+UI.bgTotalTime = label(UI.bgRoot, "--:--", 8, "muted", UDim2.new(1, -77, 0, 280), UDim2.fromOffset(54, 14), { align = Enum.TextXAlignment.Right, z = 14 })
+
+-- Symmetrical transport controls with a clear primary Play/Pause action.
+UI.bgShuffle, UI.bgShuffleIcon = createIconButton(UI.bgRoot, "shuffle", UDim2.fromOffset(20, 310), UDim2.fromOffset(29, 30), { bgRole = "bg", textRole = "muted", radius = 7, z = 14, iconSize = 17 })
+UI.bgPrev = createTransportButton(UI.bgRoot, "previous", UDim2.fromOffset(57, 310), UDim2.fromOffset(29, 30), { bgRole = "bg", textRole = "text", radius = 7, z = 14 })
+UI.bgPlay, UI.bgPlayGlyph, UI.bgPauseIcon = createPlayPauseButton(UI.bgRoot, UDim2.fromOffset(118, 301), UDim2.fromOffset(50, 48), { bgRole = "selected", textRole = "text", radius = 16, stroke = true, strokeRole = "accent", strokeWidth = 1.8, gradientStroke = true, gradientFill = true, z = 15 })
+addStroke(UI.bgPlay, palette.accent, 4, 0.86, true)
+UI.bgNext = createTransportButton(UI.bgRoot, "next", UDim2.fromOffset(182, 310), UDim2.fromOffset(29, 30), { bgRole = "bg", textRole = "text", radius = 7, z = 14 })
+UI.bgRepeat, UI.bgRepeatIcon = createIconButton(UI.bgRoot, "repeat", UDim2.fromOffset(219, 310), UDim2.fromOffset(29, 30), { bgRole = "bg", textRole = "muted", radius = 7, z = 14, iconSize = 17 })
+
+-- Two distinct sliders: music level and game audio level.
+UI.bgVolumeIcon = createSpeakerButton(UI.bgRoot, UDim2.fromOffset(17, 359), UDim2.fromOffset(22, 20), { bgRole = "bg", textRole = "muted", radius = 3, z = 14 })
+label(UI.bgRoot, "NHẠC", 8, "muted", UDim2.fromOffset(42, 359), UDim2.fromOffset(35, 20), { font = Enum.Font.GothamSemibold, z = 14 })
+UI.bgVolumeTrack = button(UI.bgRoot, "", UDim2.fromOffset(80, 361), UDim2.fromOffset(151, 16), { bgRole = "bg", textRole = "text", radius = 4, z = 13, noMotion = true })
+UI.bgVolumeTrack.BackgroundTransparency = 1
+UI.bgVolumeRail = make("Frame", UI.bgVolumeTrack, { Position = UDim2.new(0, 0, 0.5, -2), Size = UDim2.new(1, 0, 0, 4), BackgroundColor3 = palette.border, BorderSizePixel = 0, ZIndex = 14 })
+addCorner(UI.bgVolumeRail, 4); registerTheme(UI.bgVolumeRail, "BackgroundColor3", "border")
+UI.bgVolumeFill = make("Frame", UI.bgVolumeRail, { Size = UDim2.new(state.musicVolume / 100, 0, 1, 0), BackgroundColor3 = palette.accent, BorderSizePixel = 0, ZIndex = 15 })
+addCorner(UI.bgVolumeFill, 4); registerTheme(UI.bgVolumeFill, "BackgroundColor3", "accent")
+UI.bgVolumeKnob = make("Frame", UI.bgVolumeRail, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(state.musicVolume / 100, 0, 0.5, 0), Size = UDim2.fromOffset(9, 9), BackgroundColor3 = palette.text, BorderSizePixel = 0, ZIndex = 16 })
+addCorner(UI.bgVolumeKnob, 5); registerTheme(UI.bgVolumeKnob, "BackgroundColor3", "text")
+UI.bgVolumePct = label(UI.bgRoot, "70%", 8, "text", UDim2.new(1, -48, 0, 359), UDim2.fromOffset(32, 20), { align = Enum.TextXAlignment.Right, z = 14 })
+
+UI.bgGameVolumeIcon, UI.bgGameVolumeGlyph = createIconButton(UI.bgRoot, "pulse", UDim2.fromOffset(17, 400), UDim2.fromOffset(22, 20), { bgRole = "bg", iconRole = "muted", radius = 3, z = 14, iconSize = 16 })
+label(UI.bgRoot, "GAME", 8, "muted", UDim2.fromOffset(42, 400), UDim2.fromOffset(35, 20), { font = Enum.Font.GothamSemibold, z = 14 })
+UI.bgGameVolumeTrack = button(UI.bgRoot, "", UDim2.fromOffset(80, 402), UDim2.fromOffset(151, 16), { bgRole = "bg", textRole = "text", radius = 4, z = 13, noMotion = true })
+UI.bgGameVolumeTrack.BackgroundTransparency = 1
+UI.bgGameVolumeRail = make("Frame", UI.bgGameVolumeTrack, { Position = UDim2.new(0, 0, 0.5, -2), Size = UDim2.new(1, 0, 0, 4), BackgroundColor3 = palette.border, BorderSizePixel = 0, ZIndex = 14 })
+addCorner(UI.bgGameVolumeRail, 4); registerTheme(UI.bgGameVolumeRail, "BackgroundColor3", "border")
+UI.bgGameVolumeFill = make("Frame", UI.bgGameVolumeRail, { Size = UDim2.new(state.gameVolume / 100, 0, 1, 0), BackgroundColor3 = palette.accent2, BorderSizePixel = 0, ZIndex = 15 })
+addCorner(UI.bgGameVolumeFill, 4); registerTheme(UI.bgGameVolumeFill, "BackgroundColor3", "accent2")
+UI.bgGameVolumeKnob = make("Frame", UI.bgGameVolumeRail, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(state.gameVolume / 100, 0, 0.5, 0), Size = UDim2.fromOffset(9, 9), BackgroundColor3 = palette.text, BorderSizePixel = 0, ZIndex = 16 })
+addCorner(UI.bgGameVolumeKnob, 5); registerTheme(UI.bgGameVolumeKnob, "BackgroundColor3", "text")
+UI.bgGameVolumePct = label(UI.bgRoot, "100%", 8, "text", UDim2.new(1, -48, 0, 400), UDim2.fromOffset(32, 20), { align = Enum.TextXAlignment.Right, z = 14 })
+
+-- Mode bar at the bottom; the actions and their order stay explicit and touch-friendly.
+UI.bgModePanel = make("Frame", UI.bgRoot, {
+    Name = "DynamicModePanel", Position = UDim2.fromOffset(12, 426), Size = UDim2.new(1, -24, 0, 56),
+    BackgroundColor3 = palette.panel, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 15,
+})
+addCorner(UI.bgModePanel, 13); registerTheme(UI.bgModePanel, "BackgroundColor3", "panel")
+addDropShadow(UI.bgModePanel, 4, 9, 0.78)
+local bgModePanelStroke = addStroke(UI.bgModePanel, palette.border, 1, 0, false)
+registerTheme(bgModePanelStroke, "Color", "border")
+UI.bgCover.Parent = UI.bgModePanel
+UI.bgCover.Position = UDim2.fromOffset(8, 10)
+local function createModeTile(parent, title, iconKind, x, isActive, callback)
+    local tile = button(parent, "", UDim2.fromOffset(x, 8), UDim2.fromOffset(64, 41), {
+        bgRole = isActive and "selected" or "surface", textRole = "text", radius = 8,
+        stroke = true, strokeWidth = isActive and 1.2 or 0.7, gradientStroke = isActive, gradientFill = true, z = 17,
+    })
+    local iconColor = isActive and palette.text or palette.muted
+    local icon = drawIcon(tile, iconKind, UDim2.new(0.5, -7, 0, 3), UDim2.fromOffset(14, 14), iconColor, 19)
+    label(tile, title, 8, isActive and "text" or "muted", UDim2.new(0, 2, 0, 22), UDim2.new(1, -4, 0, 14), { align = Enum.TextXAlignment.Center, truncate = true, z = 19 })
+    tile.Activated:Connect(callback)
+    return tile, icon
+end
+UI.bgDynamicTile, UI.bgDynamicTileIcon = createModeTile(UI.bgModePanel, "Dynamic", "dynamic", 49, true, function() setMode("Background") end)
+UI.bgCompactTile, UI.bgCompactTileIcon = createModeTile(UI.bgModePanel, "Thu nhỏ", "window", 118, false, function() setMode("Mini") end)
+UI.bgHideTile, UI.bgHideTileIcon = createModeTile(UI.bgModePanel, "Ẩn UI", "close", 185, false, function() hideUI() end)
+
+hookCoverLoad(UI.fullCoverImage)
+hookCoverLoad(UI.miniCoverImage)
+hookCoverLoad(UI.bgCoverImage)
+if UI.bgRecordImage then hookCoverLoad(UI.bgRecordImage) end
+
+-- ⭐ UPGRADE: BorderInteractions — drag any clear edge strip to move; drag either bottom corner to resize.
+-- Hit zones stay within the border padding and avoid the header's close/settings controls.
+local function addBorderInteractions(root, mode)
+    local function begin(input, kind, axis, signX, signY)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        local initial
+        if kind == "move" then
+            initial = state.positions[mode] or Vector2.new(root.Position.X.Offset, root.Position.Y.Offset)
+        else
+            initial = state.scales[mode] or 1
+        end
+        dragOperation = {
+            kind = kind, mode = mode, input = input, start = input.Position,
+            initial = initial, axis = axis or "xy", signX = signX or 1, signY = signY or 1,
+        }
+    end
+    local function hitZone(name, pos, size, kind, axis, signX, signY, z)
+        local zone = make("TextButton", root, {
+            Name = name, Position = pos, Size = size, BackgroundTransparency = 1,
+            BorderSizePixel = 0, Text = "", AutoButtonColor = false, Active = true,
+            Selectable = false, ZIndex = z or 70,
+        })
+        zone.InputBegan:Connect(function(input) begin(input, kind, axis, signX, signY) end)
+        return zone
+    end
+    -- Long edge strips are move handles. Their ends are excluded to protect corner resize targets.
+    hitZone("BorderMoveTop", UDim2.new(0, 26, 0, 0), UDim2.new(1, -72, 0, 7), "move", nil, nil, nil, 68)
+    hitZone("BorderMoveBottom", UDim2.new(0, 26, 1, -7), UDim2.new(1, -72, 0, 7), "move", nil, nil, nil, 68)
+    hitZone("BorderMoveLeft", UDim2.new(0, 0, 0, 25), UDim2.new(0, 7, 1, -50), "move", nil, nil, nil, 68)
+    hitZone("BorderMoveRight", UDim2.new(1, -7, 0, 25), UDim2.new(0, 7, 1, -50), "move", nil, nil, nil, 68)
+
+    -- The lower corners are unambiguous resize targets. The existing bottom-right chevrons remain visible.
+    hitZone("ResizeCornerBottomLeft", UDim2.new(0, 0, 1, -21), UDim2.fromOffset(21, 21), "resize", "xy", -1, 1, 72)
+    local grip = make("TextButton", root, {
+        Name = "ResizeGrip", AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -3, 1, -3),
+        Size = UDim2.fromOffset(36, 32), BackgroundTransparency = 0.82, BackgroundColor3 = palette.panel,
+        BorderSizePixel = 0, Text = "", AutoButtonColor = false, Active = true, Selectable = false, ZIndex = 73,
+    })
+    addCorner(grip, 7)
+    registerTheme(grip, "BackgroundColor3", "panel")
+    for i = 1, 3 do
+        local line = make("Frame", grip, {
+            AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -((i - 1) * 6) - 2, 1, -2),
+            Size = UDim2.fromOffset(13 - (i - 1) * 3, 2), Rotation = -42,
+            BackgroundColor3 = palette.accent2, BorderSizePixel = 0, ZIndex = 74,
+        })
+        addCorner(line, 1)
+        registerTheme(line, "BackgroundColor3", "accent2")
+    end
+    grip.InputBegan:Connect(function(input) begin(input, "resize", "xy", 1, 1) end)
+end
+addBorderInteractions(UI.fullRoot, "Full")
+addBorderInteractions(UI.miniRoot, "Mini")
+addBorderInteractions(UI.bgRoot, "Background")
+
+local function attachDrag(handle, mode)
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragOperation = { kind = "move", mode = mode, input = input, start = input.Position, initial = state.positions[mode] or UI.roots[mode].AbsolutePosition }
+        end
+    end)
+end
+attachDrag(UI.fullDrag, "Full")
+UI.miniDragHandle = make("TextButton", UI.miniPlayerCard, { Name = "DragHandle", Position = UDim2.fromOffset(70, 1), Size = UDim2.fromOffset(25, 8), BackgroundTransparency = 1, BorderSizePixel = 0, Text = "⋮⋮", TextSize = 8, TextColor3 = palette.muted, Font = Enum.Font.GothamBold, AutoButtonColor = false, Active = true, ZIndex = 18 })
+UI.bgDragHandle = make("TextButton", UI.bgHeader, { Name = "DragHandle", Position = UDim2.fromOffset(44, 29), Size = UDim2.fromOffset(24, 9), BackgroundTransparency = 1, BorderSizePixel = 0, Text = "⋮⋮", TextSize = 8, TextColor3 = palette.muted, Font = Enum.Font.GothamBold, AutoButtonColor = false, Active = true, ZIndex = 18 })
+attachDrag(UI.miniDragHandle, "Mini")
+attachDrag(UI.bgDragHandle, "Background")
+
+-- ============================ VISUAL FINISH ============================
+-- Quiet tonal gradients and precise accent rails add depth while keeping rendering cheap.
+for _, mode in ipairs({ "Full", "Mini", "Background" }) do
+    addRoleGradient(UI.roots[mode], "bg", "deep", 90)
+end
+addRoleGradient(UI.fullHeader, "panel", "surface", 0)
+addRoleGradient(UI.fullHeaderLine, "border", "bg", 0)
+addRoleGradient(UI.sidebarDivider, "border", "bg", 90)
+addRoleGradient(UI.fullSearch, "deep", "surface", 0)
+addRoleGradient(UI.playerPanel, "deep", "panel", 0)
+addRoleGradient(UI.miniPlayerCard, "panel", "surface", 0)
+addRoleGradient(UI.miniSearch, "deep", "surface", 0)
+addRoleGradient(UI.miniGenrePanel, "bg", "panel", 90)
+addRoleGradient(UI.bgHeader, "panel", "surface", 0)
+addRoleGradient(UI.bgModePanel, "panel", "deep", 0)
+addRoleGradient(UI.modalPanel, "bg", "panel", 90)
+for _, fill in ipairs({
+    UI.fullSeekFill, UI.miniSeekFill, UI.bgSeekFill,
+    UI.fullVolumeFill, UI.miniVolumeFill, UI.bgVolumeFill, UI.bgGameVolumeFill,
+}) do
+    addRoleGradient(fill, "accent", "accent2", 0)
+end
+for _, playButton in ipairs({ UI.fullPlay, UI.miniPlay, UI.bgPlay }) do
+    addRoleGradient(playButton, "selected", "panel", 35)
+end
+
+-- Fine accent rails: the gradients are narrow, decorative and never intercept touch input.
+local fullHeaderAccent = make("Frame", UI.fullRoot, {
+    Name = "HeaderAccentRail", Position = UDim2.fromOffset(2, 44), Size = UDim2.fromOffset(108, 2),
+    BackgroundColor3 = palette.accent, BorderSizePixel = 0, Active = false, ZIndex = 13,
+})
+addRoleGradient(fullHeaderAccent, "accent", "accent2", 0)
+registerTheme(fullHeaderAccent, "BackgroundColor3", "accent")
+addCorner(fullHeaderAccent, 2)
+local bgHeaderAccent = make("Frame", UI.bgRoot, {
+    Name = "DynamicHeaderAccentRail", Position = UDim2.fromOffset(2, 40), Size = UDim2.fromOffset(78, 2),
+    BackgroundColor3 = palette.accent, BorderSizePixel = 0, Active = false, ZIndex = 14,
+})
+addRoleGradient(bgHeaderAccent, "accent", "accent2", 0)
+registerTheme(bgHeaderAccent, "BackgroundColor3", "accent")
+addCorner(bgHeaderAccent, 2)
+local miniCardAccent = make("Frame", UI.miniPlayerCard, {
+    Name = "MiniPlayerAccentRail", Position = UDim2.fromOffset(7, 1), Size = UDim2.new(0, 54, 0, 2),
+    BackgroundColor3 = palette.accent, BorderSizePixel = 0, Active = false, ZIndex = 17,
+})
+addRoleGradient(miniCardAccent, "accent", "accent2", 0)
+registerTheme(miniCardAccent, "BackgroundColor3", "accent")
+addCorner(miniCardAccent, 2)
+
+-- Header icon controls get a slightly clearer resting contrast without adding busy animation.
+for _, iconButton in ipairs({ UI.fullSettingsButton, UI.fullDynamicButton, UI.fullMiniButton, UI.fullHideButton, UI.miniDynamicButton, UI.miniModeButton, UI.miniHideButton }) do
+    if iconButton and iconButton.Parent then
+        iconButton.BackgroundTransparency = 0.18
+        iconButton.BackgroundColor3 = palette.surface
+        registerTheme(iconButton, "BackgroundColor3", "surface")
+    end
+end
+
+-- ============================== RENDERING ==============================
+local function clearGuiChildren(container, keepLayout, preserve)
+    for _, child in ipairs(container:GetChildren()) do
+        if child == preserve then
+            -- Keep the empty-state label so it can be shown again after filtering.
+        elseif keepLayout and (child:IsA("UIListLayout") or child:IsA("UIPadding") or child:IsA("UIGridLayout")) then
+            -- Keep layout managers.
+        else
+            child:Destroy()
+        end
+    end
+end
+
+local VIETNAMESE_CASE_PAIRS = {
+        {"À","à"},{"Á","á"},{"Â","â"},{"Ã","ã"},{"Ă","ă"},{"Ạ","ạ"},{"Ả","ả"},{"Ấ","ấ"},{"Ầ","ầ"},{"Ẩ","ẩ"},{"Ẫ","ẫ"},{"Ậ","ậ"},{"Ắ","ắ"},{"Ằ","ằ"},{"Ẳ","ẳ"},{"Ẵ","ẵ"},{"Ặ","ặ"},
+        {"È","è"},{"É","é"},{"Ê","ê"},{"Ẻ","ẻ"},{"Ẽ","ẽ"},{"Ẹ","ẹ"},{"Ế","ế"},{"Ề","ề"},{"Ể","ể"},{"Ễ","ễ"},{"Ệ","ệ"},
+        {"Ì","ì"},{"Í","í"},{"Ỉ","ỉ"},{"Ĩ","ĩ"},{"Ị","ị"},
+        {"Ò","ò"},{"Ó","ó"},{"Ô","ô"},{"Õ","õ"},{"Ơ","ơ"},{"Ọ","ọ"},{"Ỏ","ỏ"},{"Ố","ố"},{"Ồ","ồ"},{"Ổ","ổ"},{"Ỗ","ỗ"},{"Ộ","ộ"},{"Ớ","ớ"},{"Ờ","ờ"},{"Ở","ở"},{"Ỡ","ỡ"},{"Ợ","ợ"},
+        {"Ù","ù"},{"Ú","ú"},{"Ủ","ủ"},{"Ũ","ũ"},{"Ư","ư"},{"Ụ","ụ"},{"Ứ","ứ"},{"Ừ","ừ"},{"Ử","ử"},{"Ữ","ữ"},{"Ự","ự"},
+        {"Ỳ","ỳ"},{"Ý","ý"},{"Ỷ","ỷ"},{"Ỹ","ỹ"},{"Ỵ","ỵ"},{"Đ","đ"},
+    }
+
+local function normalizeSearchText(value)
+    value = string.lower(tostring(value or ""))
+    for _, pair in ipairs(VIETNAMESE_CASE_PAIRS) do
+        value = string.gsub(value, pair[1], pair[2])
+    end
+    return value
+end
+
+local function filteredTracks(mode)
+    local rawQuery = (mode == "Mini") and state.miniQuery or state.fullQuery
+    local query = normalizeSearchText(rawQuery)
+    local result = {}
+    local recentIndex = {}
+    for index, id in ipairs(state.recent) do recentIndex[id] = index end
+    for _, track in ipairs(tracks) do
+        local pageOk = true
+        if mode == "Full" then
+            if state.page == "Favorites" then pageOk = track.Favorite == true end
+            if state.page == "Recent" then pageOk = recentIndex[track.Id] ~= nil end
+            if state.page == "Mine" then pageOk = track.Custom == true end
+            if state.page == "Genre" then pageOk = state.genre == track.Genre end
+        end
+        if mode == "Mini" and state.miniGenre then pageOk = state.miniGenre == track.Genre end
+        local queryOk = query == "" or string.find(normalizeSearchText(track.Title), query, 1, true) ~= nil or string.find(track.Id, query, 1, true) ~= nil
+        if pageOk and queryOk then table.insert(result, track) end
+    end
+    if mode == "Full" and state.page == "Recent" then
+        table.sort(result, function(a, b) return (recentIndex[a.Id] or 999) < (recentIndex[b.Id] or 999) end)
+    elseif mode == "Full" and state.page == "Favorites" then
+        local originalOrder = {}
+        for index, track in ipairs(tracks) do originalOrder[track.Id] = index end
+        table.sort(result, function(a, b)
+            local ap, bp = a.Pinned == true, b.Pinned == true
+            if ap ~= bp then return ap end
+            return (originalOrder[a.Id] or math.huge) < (originalOrder[b.Id] or math.huge)
+        end)
+    end
+    return result
+end
+
+local function refreshTrackMetadata()
+    local track = selectedTrack()
+    local imageUri = "rbxthumb://type=Asset&id=" .. track.Id .. "&w=150&h=150"
+    UI.fullTrackTitle.Text, UI.fullTrackId.Text = track.Title, track.Id
+    UI.miniTrackTitle.Text, UI.miniTrackId.Text = track.Title, track.Id
+    UI.bgTrackTitle.Text, UI.bgTrackId.Text = track.Title, track.Id
+    UI.fullTotalTime.Text, UI.bgTotalTime.Text = formatDuration(track.Duration), formatDuration(track.Duration)
+    UI.fullCurrentTime.Text, UI.bgCurrentTime.Text = formatTime(state.progress), formatTime(state.progress)
+    if UI.fullCoverImage.Image ~= imageUri then UI.fullCoverImage.Image = imageUri end
+    if UI.miniCoverImage.Image ~= imageUri then UI.miniCoverImage.Image = imageUri end
+    if UI.bgCoverImage.Image ~= imageUri then UI.bgCoverImage.Image = imageUri end
+    if UI.bgRecordImage and UI.bgRecordImage.Image ~= imageUri then UI.bgRecordImage.Image = imageUri end
+    updateCoverGradient(UI.fullCover, track)
+    updateCoverGradient(UI.miniCover, track)
+    updateCoverGradient(UI.bgCover, track)
+    -- Keep the vinyl fallback visible until Roblox confirms the thumbnail has loaded.
+    UI.fullCoverImage.Visible = UI.fullCoverImage.IsLoaded and state.visualizerStyle ~= "Wave"
+    UI.miniCoverImage.Visible = UI.miniCoverImage.IsLoaded and state.visualizerStyle ~= "Wave"
+    UI.bgCoverImage.Visible = UI.bgCoverImage.IsLoaded
+    if UI.bgRecordImage then UI.bgRecordImage.Visible = UI.bgRecordImage.IsLoaded end
+    local ratio = math.clamp(state.progress / math.max(1, track.Duration), 0, 1)
+    UI.fullSeekFill.Size = UDim2.new(ratio, 0, 1, 0); UI.fullSeekKnob.Position = UDim2.new(ratio, 0, 0.5, 0)
+    UI.miniSeekFill.Size = UDim2.new(ratio, 0, 1, 0); UI.bgSeekFill.Size = UDim2.new(ratio, 0, 1, 0)
+    local actuallyPlaying = isPlaybackActive()
+    UI.fullPlayGlyph.Visible, UI.fullPauseIcon.Visible = not actuallyPlaying, actuallyPlaying
+    UI.miniPlayGlyph.Visible, UI.miniPauseIcon.Visible = not actuallyPlaying, actuallyPlaying
+    UI.bgPlayGlyph.Visible, UI.bgPauseIcon.Visible = not actuallyPlaying, actuallyPlaying
+    syncVinylSpins()
+    setIconColor(UI.fullLogoIcon, palette.accent)
+    setIconColor(UI.bgLogo, palette.accent)
+    if UI.bgRecordIcon then setIconColor(UI.bgRecordIcon, palette.accent) end
+    if UI.bgDynamicTileIcon then setIconColor(UI.bgDynamicTileIcon, palette.text) end
+    if UI.bgCompactTileIcon then setIconColor(UI.bgCompactTileIcon, palette.muted) end
+    if UI.bgHideTileIcon then setIconColor(UI.bgHideTileIcon, palette.muted) end
+    setIconColor(UI.fullDynamicIcon, palette.muted)
+    setIconColor(UI.fullMiniIcon, palette.muted)
+    setIconColor(UI.fullHideIcon, palette.text)
+    setIconColor(UI.miniDynamicIcon, palette.muted)
+    setIconColor(UI.miniModeIcon, palette.muted)
+    setIconColor(UI.miniHideIcon, palette.text)
+    setIconColor(UI.restoreIcon, palette.accent)
+    setIconColor(UI.fullShuffleIcon, state.shuffle and palette.accent2 or palette.muted)
+    setIconColor(UI.bgShuffleIcon, state.shuffle and palette.accent2 or palette.muted)
+    setIconColor(UI.fullRepeatIcon, state.repeatOn and palette.accent2 or palette.muted)
+    setIconColor(UI.bgRepeatIcon, state.repeatOn and palette.accent2 or palette.muted)
+    setIconColor(UI.contextFavIcon, palette.accent)
+    setIconColor(UI.contextGenreIcon, palette.accent2)
+    setIconColor(UI.contextAddIcon, palette.accent2)
+    setIconColor(UI.contextDeleteIcon, palette.danger)
+end
+
+-- ⭐ UPGRADE: createPremiumCover — six-layer native-geometry cover; artwork is optional.
+local function createPremiumCover(parent, track, pos, size, z)
+    local pair = COVER_PAIRS[1]
+    for i, t in ipairs(tracks) do
+        if t.Id == track.Id then
+            pair = COVER_PAIRS[((i - 1) % #COVER_PAIRS) + 1]
+            break
+        end
+    end
+    z = z or 15
+    local cover = gradientFrame(parent, pos, size, pair, 7, z)
+    cover.Name = "PremiumCover_" .. tostring(track.Id)
+    cover.ClipsDescendants = true
+
+    -- Layer 2: diagonal glass sheen.
+    local sheen = make("Frame", cover, {
+        Name = "CoverDiagonalSheen", Position = UDim2.new(-0.16, 0, -0.16, 0),
+        Size = UDim2.new(1.36, 0, 0.34, 0), Rotation = -25,
+        BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0.78,
+        BorderSizePixel = 0, Active = false, ZIndex = z + 2,
+    })
+    make("UIGradient", sheen, {
+        Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.new(1, 1, 1)), Rotation = 0,
+        Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.5, 0.30), NumberSequenceKeypoint.new(1, 1) }),
+    })
+
+    -- Layer 3: the vector vinyl below supplies three concentric grooves; add a fine premium rim.
+    local side = math.min(size.X.Offset, size.Y.Offset)
+    addStroke(cover, Color3.new(1, 1, 1), side >= 36 and 0.8 or 0.65, 0.68, false)
+
+    -- Layer 4: existing vector vinyl remains the guaranteed fallback.
+    drawIcon(cover, "vinyl", UDim2.fromOffset(0, 0), UDim2.fromOffset(size.X.Offset, size.Y.Offset), palette.accent, z + 4)
+
+    -- Layer 5: the selected track may show a thumbnail in its center medallion. Limiting
+    -- thumbnails to selected rows avoids repeated remote requests while scrolling long playlists.
+    if track.Id == state.selectedId then
+        local medallion = math.max(10, math.floor(side * 0.42))
+        local artwork = make("ImageLabel", cover, {
+            Name = "OptionalArtwork", AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(medallion, medallion),
+            BackgroundTransparency = 1, BorderSizePixel = 0,
+            Image = "rbxthumb://type=Asset&id=" .. tostring(track.Id) .. "&w=150&h=150",
+            ScaleType = Enum.ScaleType.Crop, Visible = false, ZIndex = z + 5,
+        })
+        addCorner(artwork, math.ceil(medallion / 2))
+        artwork:GetPropertyChangedSignal("IsLoaded"):Connect(function()
+            if artwork.Parent then artwork.Visible = artwork.IsLoaded end
+        end)
+        artwork.Visible = artwork.IsLoaded
+    end
+
+    -- Layer 6: lower vignette anchors the artwork and keeps the tile visually rich.
+    local vignette = make("Frame", cover, {
+        Name = "CoverBottomVignette", Position = UDim2.new(0, 0, 0.56, 0),
+        Size = UDim2.new(1, 0, 0.44, 0), BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 0.60, BorderSizePixel = 0, Active = false, ZIndex = z + 6,
+    })
+    make("UIGradient", vignette, {
+        Color = ColorSequence.new(Color3.new(0, 0, 0), Color3.new(0, 0, 0)), Rotation = 90,
+        Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0.18) }),
+    })
+    return cover
+end
+
+local function createFullRow(track, index)
+    local isSelected = track.Id == state.selectedId
+    local row = make("TextButton", UI.fullList, {
+        Name = "Track_" .. track.Id, Size = UDim2.new(1, -6, 0, 50),
+        BackgroundColor3 = isSelected and palette.selected or palette.surface,
+        BackgroundTransparency = isSelected and 0 or 0.22,
+        BorderSizePixel = 0, Text = "", AutoButtonColor = false, Active = true,
+        LayoutOrder = index, ZIndex = 14,
+    })
+    addCorner(row, 9)
+    -- ⭐ UPGRADE: TrackCardSurface — subtle gradient and second low-opacity halo for selection.
+    addRoleGradient(row, isSelected and "selected" or "surface", isSelected and "surface" or "panel", 90)
+    if isSelected then
+        addStroke(row, palette.accent, 4, 0.82, true)
+        addStroke(row, palette.accent, 1.35, 0, true)
+    end
+    registerTheme(row, "BackgroundColor3", isSelected and "selected" or "surface")
+    local rowTransparency = isSelected and 0 or 0.22
+    row.MouseEnter:Connect(function()
+        if row.Parent then TweenService:Create(row, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            BackgroundTransparency = isSelected and 0.02 or 0.12,
+        }):Play() end
+    end)
+    row.MouseLeave:Connect(function()
+        if row.Parent then TweenService:Create(row, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            BackgroundTransparency = rowTransparency,
+        }):Play() end
+    end)
+    local indexColor = isSelected and palette.accent2 or palette.muted
+    glyph(row, tostring(index), UDim2.fromOffset(4, 0), UDim2.fromOffset(22, 50), 10, indexColor, 15)
+    createPremiumCover(row, track, UDim2.fromOffset(43, 6), UDim2.fromOffset(38, 38), 15)
+    label(row, track.Title, 10, "text", UDim2.fromOffset(96, 6), UDim2.new(1, -220, 0, 17), { font = Enum.Font.GothamSemibold, truncate = true, z = 17 })
+    label(row, track.Id, 7, "muted", UDim2.fromOffset(96, 24), UDim2.new(1, -220, 0, 14), { truncate = true, z = 17 })
+    label(row, formatDuration(track.Duration), 8, "muted", UDim2.new(1, -110, 0, 0), UDim2.fromOffset(46, 50), { align = Enum.TextXAlignment.Right, z = 17 })
+    if isSelected then
+        local eq = make("Frame", row, { Name = "TrackStateIcon", Position = UDim2.new(1, -82, 0.5, -7), Size = UDim2.fromOffset(22, 14), BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 17 })
+        if isPlaybackActive() then
+            for j, barHeight in ipairs({ 5, 11, 8, 13 }) do
+                local bar = make("Frame", eq, { Position = UDim2.fromOffset((j - 1) * 5 + 1, 14 - barHeight), Size = UDim2.fromOffset(2.5, barHeight), BackgroundColor3 = palette.accent2, BorderSizePixel = 0, ZIndex = 18 })
+                addCorner(bar, 1); registerTheme(bar, "BackgroundColor3", "accent2")
+                table.insert(UI.trackMiniWaveBars, { object = bar, baseHeight = barHeight, maxHeight = 14, phase = j * 1.2 + index * 0.19, root = UI.fullRoot })
+            end
+        else
+            local p1 = make("Frame", eq, { Position = UDim2.fromOffset(3, 3), Size = UDim2.fromOffset(2, 8), BackgroundColor3 = palette.accent2, BorderSizePixel = 0, ZIndex = 18 })
+            local p2 = make("Frame", eq, { Position = UDim2.fromOffset(13, 3), Size = UDim2.fromOffset(2, 8), BackgroundColor3 = palette.accent2, BorderSizePixel = 0, ZIndex = 18 })
+            addCorner(p1, 1); addCorner(p2, 1)
+            registerTheme(p1, "BackgroundColor3", "accent2"); registerTheme(p2, "BackgroundColor3", "accent2")
+        end
+    end
+    local more = createDotsButton(row, UDim2.new(1, -39, 0.5, -17), UDim2.fromOffset(27, 34), { bgRole = "surface", textRole = "muted", radius = 8, z = 20 }, true)
+    more.Activated:Connect(function() controls.openTrackMenu(track, more) end)
+    row.Activated:Connect(function() controls.selectTrack(track) end)
+    if not isSelected then
+        local sep = make("Frame", row, { Position = UDim2.new(0, 8, 1, -1), Size = UDim2.new(1, -16, 0, 1), BackgroundColor3 = palette.border, BackgroundTransparency = 0.35, BorderSizePixel = 0, ZIndex = 15 })
+        registerTheme(sep, "BackgroundColor3", "border")
+    end
+end
+
+local function createMiniRow(track, index)
+    local isSelected = track.Id == state.selectedId
+    local row = make("TextButton", UI.miniList, {
+        Name = "MiniTrack_" .. track.Id, Size = UDim2.new(1, -8, 0, 47),
+        BackgroundColor3 = isSelected and palette.selected or palette.surface,
+        BackgroundTransparency = isSelected and 0 or 0.28,
+        BorderSizePixel = 0, Text = "", AutoButtonColor = false, Active = true, LayoutOrder = index, ZIndex = 14,
+    })
+    addCorner(row, 8)
+    -- ⭐ UPGRADE: MiniTrackCard — compact theme gradient, clean selected edge, and hover easing.
+    addRoleGradient(row, isSelected and "selected" or "surface", isSelected and "surface" or "panel", 90)
+    if isSelected then
+        addStroke(row, palette.accent, 3.5, 0.84, true)
+        addStroke(row, palette.accent, 1.2, 0, true)
+    end
+    registerTheme(row, "BackgroundColor3", isSelected and "selected" or "surface")
+    local rowTransparency = isSelected and 0 or 0.28
+    row.MouseEnter:Connect(function()
+        if row.Parent then TweenService:Create(row, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            BackgroundTransparency = isSelected and 0.02 or 0.14,
+        }):Play() end
+    end)
+    row.MouseLeave:Connect(function()
+        if row.Parent then TweenService:Create(row, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            BackgroundTransparency = rowTransparency,
+        }):Play() end
+    end)
+    createPremiumCover(row, track, UDim2.fromOffset(7, 5), UDim2.fromOffset(37, 37), 15)
+    label(row, track.Title, 9, "text", UDim2.fromOffset(53, 6), UDim2.new(1, -160, 0, 16), { font = Enum.Font.GothamSemibold, truncate = true, z = 17 })
+    label(row, track.Id, 6, "muted", UDim2.fromOffset(53, 23), UDim2.new(1, -160, 0, 12), { truncate = true, z = 17 })
+    label(row, formatDuration(track.Duration), 8, "muted", UDim2.new(1, -79, 0, 0), UDim2.fromOffset(35, 47), { align = Enum.TextXAlignment.Right, z = 17 })
+    if isSelected and isPlaybackActive() then
+        for j, barHeight in ipairs({ 4, 9, 6, 11 }) do
+            local bar = make("Frame", row, {
+                Name = "MiniPlayingWave" .. j, AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.new(1, -124 + (j - 1) * 4, 0.5, 0), Size = UDim2.fromOffset(2, barHeight),
+                BackgroundColor3 = palette.accent2, BorderSizePixel = 0, ZIndex = 18,
+            })
+            addCorner(bar, 1); registerTheme(bar, "BackgroundColor3", "accent2")
+            table.insert(UI.trackMiniWaveBars, { object = bar, baseHeight = barHeight, maxHeight = 12, phase = j * 1.6 + index * 0.11, root = UI.miniRoot })
+        end
+    end
+    local more = createDotsButton(row, UDim2.new(1, -34, 0.5, -14), UDim2.fromOffset(25, 28), { bgRole = "surface", textRole = "muted", radius = 7, z = 20 }, false)
+    more.Activated:Connect(function() controls.openTrackMenu(track, more) end)
+    row.Activated:Connect(function() controls.selectTrack(track) end)
+end
+
+local function refreshNav()
+    for key, item in pairs(UI.navButtons) do
+        local selected = state.page == key or (key == "Genres" and state.page == "Genre")
+        item.button.BackgroundTransparency = selected and 0 or 1
+        item.button.BackgroundColor3 = selected and palette.selected or palette.panel
+        if selected then
+            local stroke = item.button:FindFirstChildOfClass("UIStroke")
+            if not stroke then addStroke(item.button, palette.accent, 1, 0, true) end
+            setIconColor(item.icon, palette.text)
+            item.text.TextColor3 = palette.text
+        else
+            local stroke = item.button:FindFirstChildOfClass("UIStroke")
+            if stroke then stroke:Destroy() end
+            setIconColor(item.icon, palette.muted)
+            item.text.TextColor3 = palette.muted
+        end
+    end
+    for genre, item in pairs(UI.sideGenreButtons) do
+        local selected = state.page == "Genre" and state.genre == genre
+        item.text.TextColor3 = selected and palette.text or palette.muted
+        item.button.BackgroundTransparency = selected and 0.02 or 1
+        item.button.BackgroundColor3 = selected and palette.selected or palette.panel
+        local activeStroke = item.button:FindFirstChildOfClass("UIStroke")
+        if selected and not activeStroke then addStroke(item.button, palette.accent, 0.9, 0.08, true) end
+        if not selected and activeStroke then activeStroke:Destroy() end
+    end
+    for genre, data in pairs(UI.miniGenreButtons) do
+        local btn = data.button
+        local selected = state.miniGenre == genre
+        local color = data.color
+        local stroke = btn:FindFirstChildOfClass("UIStroke")
+        if stroke then
+            stroke.Color = selected and palette.accent2 or color
+            stroke.Thickness = selected and 1.7 or 1.1
+        end
+        btn.BackgroundColor3 = selected
+            and Color3.fromRGB(math.floor(color.R * 62), math.floor(color.G * 50), math.floor(color.B * 68))
+            or Color3.fromRGB(math.floor(color.R * 30), math.floor(color.G * 24), math.floor(color.B * 28))
+        btn.BackgroundTransparency = 0
+        setIconColor(data.icon, color)
+    end
+end
+
+local virtualLists = {
+    Full = { rowHeight = 50, rangeStart = nil, rangeEnd = nil, results = {}, filterKey = nil, rendering = false, resetScroll = false },
+    Mini = { rowHeight = 47, rangeStart = nil, rangeEnd = nil, results = {}, filterKey = nil, rendering = false, resetScroll = false },
+}
+
+local function pruneDeadThemeReferences()
+    for i = #accentGradients, 1, -1 do
+        local gradient = accentGradients[i]
+        if not gradient or not gradient.Parent then table.remove(accentGradients, i) end
+    end
+    for i = #themeBindings, 1, -1 do
+        local record = themeBindings[i]
+        if not record.object or not record.object.Parent then table.remove(themeBindings, i) end
+    end
+    for i = #themeGradients, 1, -1 do
+        local record = themeGradients[i]
+        if not record.gradient or not record.gradient.Parent then table.remove(themeGradients, i) end
+    end
+end
+
+local function makeVirtualSpacer(list, height, layoutOrder, name)
+    if height <= 0 then return nil end
+    return make("Frame", list, {
+        Name = name,
+        Size = UDim2.new(1, 0, 0, height),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Active = false,
+        LayoutOrder = layoutOrder,
+        ZIndex = 13,
+    })
+end
+
+local function clearVirtualList(mode)
+    local cfg = virtualLists[mode]
+    local list = mode == "Full" and UI.fullList or UI.miniList
+    clearGuiChildren(list, true)
+    list.CanvasSize = UDim2.fromOffset(0, 0)
+    cfg.rangeStart, cfg.rangeEnd = nil, nil
+    cfg.results = {}
+end
+
+local function renderVirtualWindow(mode, force)
+    local cfg = virtualLists[mode]
+    local list = mode == "Full" and UI.fullList or UI.miniList
+    local results = cfg.results
+    local total = #results
+    local rowHeight = cfg.rowHeight
+    if cfg.rendering then return end
+    if total == 0 then
+        clearGuiChildren(list, true)
+        list.CanvasSize = UDim2.fromOffset(0, 0)
+        cfg.rangeStart, cfg.rangeEnd = nil, nil
+        return
+    end
+
+    local oldY = cfg.resetScroll and 0 or math.max(0, list.CanvasPosition.Y)
+    cfg.resetScroll = false
+    local uiScale = mode == "Full" and UI.fullScale.Scale or UI.miniScale.Scale
+    local viewportHeight = list.AbsoluteSize.Y / math.max(0.01, uiScale)
+    if viewportHeight <= 0 then viewportHeight = mode == "Full" and 307 or 143 end
+    local firstVisible = math.floor(oldY / rowHeight) + 1
+    local visibleCount = math.max(1, math.ceil(viewportHeight / rowHeight))
+    if not force and cfg.rangeStart and cfg.rangeEnd
+        and firstVisible >= cfg.rangeStart + 2
+        and (firstVisible + visibleCount - 1) <= cfg.rangeEnd - 2 then
+        return
+    end
+
+    local first = math.max(1, firstVisible - 3)
+    local last = math.min(total, firstVisible + visibleCount + 3)
+    cfg.rendering = true
+    clearGuiChildren(list, true)
+    -- The spacers preserve the full scrollable height while only a small window of rows exists.
+    makeVirtualSpacer(list, (first - 1) * rowHeight, -1000, "VirtualTopSpacer")
+    for i = first, last do
+        if mode == "Full" then
+            createFullRow(results[i], i)
+        else
+            createMiniRow(results[i], i)
+        end
+    end
+    makeVirtualSpacer(list, (total - last) * rowHeight, total + 1000, "VirtualBottomSpacer")
+    list.CanvasSize = UDim2.fromOffset(0, total * rowHeight)
+    cfg.rangeStart, cfg.rangeEnd = first, last
+    pruneDeadThemeReferences()
+    local maxY = math.max(0, total * rowHeight - viewportHeight)
+    list.CanvasPosition = Vector2.new(0, math.clamp(oldY, 0, maxY))
+    cfg.rendering = false
+end
+
+local function refreshLists()
+    UI.miniListHeading.Text = (string.gsub(state.miniQuery or "", "%s", "") ~= "") and "Kết quả tìm kiếm" or "Đang phát gần đây"
+    local fullResults = filteredTracks("Full")
+    local miniResults = filteredTracks("Mini")
+    UI.fullEmpty.Text = state.page == "Mine" and "Chưa có bài trong Nhạc của tôi" or (state.page == "Favorites" and "Chưa có bài yêu thích" or "Chưa có bài trong danh sách")
+    UI.fullEmpty.Visible = #fullResults == 0
+    UI.miniEmpty.Visible = #miniResults == 0
+
+    local fullKey = table.concat({ state.page or "", state.genre or "", state.fullQuery or "" }, "|")
+    local miniKey = table.concat({ state.miniGenre or "", state.miniQuery or "" }, "|")
+    virtualLists.Full.results = fullResults
+    virtualLists.Mini.results = miniResults
+
+    if state.mode == "Full" then
+        if virtualLists.Full.filterKey ~= fullKey then
+            virtualLists.Full.filterKey = fullKey
+            virtualLists.Full.resetScroll = true
+            virtualLists.Full.rangeStart = nil
+        end
+        -- Rebuild only the visible window, not every song in the library.
+        renderVirtualWindow("Full", true)
+        clearVirtualList("Mini")
+        virtualLists.Mini.filterKey = miniKey
+    elseif state.mode == "Mini" then
+        if virtualLists.Mini.filterKey ~= miniKey then
+            virtualLists.Mini.filterKey = miniKey
+            virtualLists.Mini.resetScroll = true
+            virtualLists.Mini.rangeStart = nil
+        end
+        renderVirtualWindow("Mini", true)
+        clearVirtualList("Full")
+        virtualLists.Full.filterKey = fullKey
+    else
+        -- Dynamic mode has no playlist panel; drop all row instances until needed again.
+        clearVirtualList("Full")
+        clearVirtualList("Mini")
+        virtualLists.Full.filterKey = fullKey
+        virtualLists.Mini.filterKey = miniKey
+    end
+    refreshNav()
+end
+UI.fullList:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+    if state.mode == "Full" then renderVirtualWindow("Full", false) end
+end)
+UI.miniList:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+    if state.mode == "Mini" then renderVirtualWindow("Mini", false) end
+end)
+
+local function refreshVolume()
+    local ratio = math.clamp(state.musicVolume / 100, 0, 1)
+    for _, objects in ipairs({
+        { fill = UI.fullVolumeFill, knob = UI.fullVolumeKnob, pct = UI.fullVolumePct },
+        { fill = UI.miniVolumeFill, knob = UI.miniVolumeKnob, pct = UI.miniVolumePct },
+        { fill = UI.bgVolumeFill, knob = UI.bgVolumeKnob, pct = UI.bgVolumePct },
+    }) do
+        objects.fill.Size = UDim2.new(ratio, 0, 1, 0)
+        objects.knob.Position = UDim2.new(ratio, 0, 0.5, 0)
+        objects.pct.Text = tostring(math.floor(state.musicVolume + 0.5)) .. "%"
+    end
+    if musicSound and musicSound.Parent then
+        pcall(function()
+            musicSound.Volume = math.clamp(state.musicVolume / 100, 0, 1)
+            musicSound.Looped = state.repeatOn
+        end)
+    end
+    local gameRatio = math.clamp(state.gameVolume / 100, 0, 1)
+    UI.bgGameVolumeFill.Size = UDim2.new(gameRatio, 0, 1, 0)
+    UI.bgGameVolumeKnob.Position = UDim2.new(gameRatio, 0, 0.5, 0)
+    UI.bgGameVolumePct.Text = tostring(math.floor(state.gameVolume + 0.5)) .. "%"
+    setIconColor(UI.fullVolumeIcon, palette.muted)
+    setIconColor(UI.miniVolumeIcon, palette.muted)
+    setIconColor(UI.bgVolumeIcon, palette.muted)
+    setIconColor(UI.bgGameVolumeIcon, palette.accent2)
+end
+
+local function refreshAll(refreshVisibleList)
+    refreshTrackMetadata()
+    if refreshVisibleList ~= false then refreshLists() end
+    refreshVolume()
+    applyUITransparency()
+end
+controls.refreshAll = refreshAll
+
+local function clearMusicSound()
+    playbackGeneration += 1
+    for _, connection in ipairs(playbackConnections) do
+        pcall(function() connection:Disconnect() end)
+    end
+    table.clear(playbackConnections)
+    local oldSound = musicSound
+    musicSound = nil
+    musicSoundId = nil
+    if oldSound then
+        pcall(function() oldSound:Stop() end)
+        pcall(function() oldSound:Destroy() end)
+    end
+end
+
+local function updateProgressDisplay()
+    local track = selectedTrack()
+    local duration = math.max(0, tonumber(track.Duration) or 0)
+    local position = math.clamp(tonumber(state.progress) or 0, 0, math.max(0, duration))
+    local ratio = duration > 0 and math.clamp(position / duration, 0, 1) or 0
+    UI.fullCurrentTime.Text = formatTime(position)
+    UI.bgCurrentTime.Text = formatTime(position)
+    UI.fullTotalTime.Text = formatDuration(duration)
+    UI.bgTotalTime.Text = formatDuration(duration)
+    UI.fullSeekFill.Size = UDim2.new(ratio, 0, 1, 0)
+    UI.fullSeekKnob.Position = UDim2.new(ratio, 0, 0.5, 0)
+    UI.miniSeekFill.Size = UDim2.new(ratio, 0, 1, 0)
+    UI.bgSeekFill.Size = UDim2.new(ratio, 0, 1, 0)
+end
+
+local function stopPlayback(resetProgress, quiet)
+    clearMusicSound()
+    state.playing = false
+    playbackStatus = "Stopped"
+    if resetProgress then state.progress = 0 end
+    if guiAlive then
+        refreshAll(false)
+        if not quiet then showToast("Đã dừng phát nhạc") end
+    end
+end
+
+local function failPlayback(generation, sound, reason)
+    if generation ~= playbackGeneration or musicSound ~= sound then return end
+    clearMusicSound()
+    state.playing = false
+    state.progress = 0
+    playbackStatus = "Error"
+    refreshAll(false)
+    showToast(reason or "Không tải được âm thanh. Hãy kiểm tra ID và quyền sử dụng asset.")
+    warn("[Dungdx Music Player] Audio playback failed for ID " .. tostring(state.selectedId) .. ". Check SoundId, asset status and experience permissions.")
+end
+
+playTrack = function(track)
+    track = track or selectedTrack()
+    if not track or not track.Id or not string.match(tostring(track.Id), "^%d+$") then
+        showToast("ID âm thanh không hợp lệ")
+        return
+    end
+
+    clearMusicSound()
+    local generation = playbackGeneration
+    local trackId = tostring(track.Id)
+    local sound = Instance.new("Sound")
+    sound.Name = "DGMusicPlayer_ClientTrack"
+    sound.SoundId = "rbxassetid://" .. trackId
+    sound.Volume = math.clamp(state.musicVolume / 100, 0, 1)
+    sound.Looped = state.repeatOn
+    sound.PlaybackSpeed = 1
+    sound.Parent = SoundService -- Background audio: no position-based falloff.
+
+    musicSound = sound
+    musicSoundId = trackId
+    state.selectedId = trackId
+    state.progress = 0
+    state.playing = true -- User intent; the UI reports Playing only once IsPlaying is true.
+    playbackStatus = "Loading"
+
+    local durationUpdated = false
+    local startPending = false
+    local startAttempts = 0
+    local function isCurrent()
+        return generation == playbackGeneration and musicSound == sound and sound.Parent ~= nil
+    end
+
+    local function refreshDuration()
+        if durationUpdated then return end
+        durationUpdated = true
+        local length = tonumber(sound.TimeLength) or 0
+        if length > 0 and length < 86400 then
+            track.Duration = math.floor(length)
+        end
+        state.progress = math.max(0, tonumber(sound.TimePosition) or 0)
+    end
+
+    local function confirmStarted(attempt)
+        task.delay(0.45, function()
+            if not isCurrent() then return end
+            startPending = false
+            if not state.playing then
+                if sound.IsPlaying then pcall(function() sound:Pause() end) end
+                playbackStatus = "Paused"
+                refreshAll(false)
+                return
+            end
+            if sound.IsPlaying then
+                playbackStatus = "Playing"
+                refreshAll(false)
+                showToast("Đang phát: " .. tostring(track.Title))
+                return
+            end
+            if attempt < 2 and sound.IsLoaded then
+                startAttempts = attempt + 1
+                startPending = true
+                local retryOK, retryError = pcall(function() sound:Play() end)
+                if not retryOK then
+                    failPlayback(generation, sound, "Roblox không thể phát ID " .. trackId .. ": " .. tostring(retryError))
+                    return
+                end
+                confirmStarted(startAttempts)
+            else
+                failPlayback(generation, sound, "ID " .. trackId .. " đã tải nhưng Roblox không bắt đầu phát. Hãy thử lại hoặc kiểm tra quyền dùng âm thanh của trải nghiệm.")
+            end
+        end)
+    end
+
+    local function startWhenLoaded()
+        if not isCurrent() or not sound.IsLoaded then return end
+        refreshDuration()
+        if not state.playing then
+            playbackStatus = "Paused"
+            refreshAll(false)
+            showToast("Đã tải nhạc · Đang tạm dừng")
+            return
+        end
+        if sound.IsPlaying then
+            playbackStatus = "Playing"
+            refreshAll(false)
+            showToast("Đang phát: " .. tostring(track.Title))
+            return
+        end
+        if startPending then return end
+
+        startAttempts = 1
+        startPending = true
+        playbackStatus = "Loading"
+        local playOK, playError = pcall(function() sound:Play() end)
+        if not playOK then
+            startPending = false
+            failPlayback(generation, sound, "Roblox không thể phát ID " .. trackId .. ": " .. tostring(playError))
+            return
+        end
+        refreshAll(false)
+        confirmStarted(startAttempts)
+    end
+
+    table.insert(playbackConnections, sound.Loaded:Connect(startWhenLoaded))
+    table.insert(playbackConnections, sound.Ended:Connect(function()
+        if not isCurrent() then return end
+        if state.repeatOn then return end
+        state.playing = false
+        state.progress = tonumber(track.Duration) or sound.TimePosition
+        playbackStatus = "Ended"
+        refreshAll(false)
+        task.defer(function()
+            if generation == playbackGeneration and advancePlayback then advancePlayback() end
+        end)
+    end))
+
+    refreshAll(false)
+    showToast("Đang tải âm thanh…")
+
+    -- Check immediately after connecting, because Loaded does not fire retroactively.
+    if sound.IsLoaded then startWhenLoaded() end
+
+    -- Preload catches unavailable/restricted IDs and exposes an actionable error rather than a fake pause state.
+    task.spawn(function()
+        local fetchFailed = false
+        local fetchStatus = nil
+        local preloadOK, preloadError = pcall(function()
+            ContentProvider:PreloadAsync({ sound }, function(_, status)
+                fetchStatus = status
+                if status == Enum.AssetFetchStatus.Failure or status == Enum.AssetFetchStatus.TimedOut then
+                    fetchFailed = true
+                end
+            end)
+        end)
+        if not isCurrent() then return end
+
+        if sound.IsLoaded then
+            startWhenLoaded()
+        elseif not preloadOK or fetchFailed then
+            local detail = (not preloadOK and tostring(preloadError)) or tostring(fetchStatus or "không rõ nguyên nhân")
+            failPlayback(generation, sound, "Không tải được ID " .. trackId .. " (" .. detail .. "). ID có thể không còn công khai hoặc trải nghiệm chưa được cấp quyền.")
+        end
+    end)
+
+    task.delay(22, function()
+        if isCurrent() and not sound.IsLoaded then
+            failPlayback(generation, sound, "Âm thanh tải quá lâu. Kiểm tra ID, kết nối và quyền sử dụng audio của trải nghiệm Roblox.")
+        end
+    end)
+end
+
+local function selectTrack(track)
+    if not track then return end
+    local previousId = state.selectedId
+    local continuePlayback = state.playing
+    if previousId ~= track.Id then
+        if musicSound then clearMusicSound() end
+        state.playing = false
+        state.progress = 0
+    end
+    state.selectedId = track.Id
+    if musicSound and musicSoundId == track.Id then
+        state.progress = musicSound.TimePosition
+    else
+        state.progress = math.min(state.progress, track.Duration)
+    end
+    addRecent(track.Id)
+    refreshAll()
+    scheduleAutoSave()
+    if continuePlayback and previousId ~= track.Id then
+        task.defer(function()
+            if guiAlive and state.selectedId == track.Id then playTrack(track) end
+        end)
+    end
+end
+controls.selectTrack = selectTrack
+
+UI.contextMenu = make("Frame", screenGui, {
+    Name = "TrackContextMenu", Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(220, 180),
+    BackgroundColor3 = palette.panel, BorderSizePixel = 0, Visible = false, ZIndex = 150,
+    ClipsDescendants = true,
+})
+addCorner(UI.contextMenu, 11)
+addStroke(UI.contextMenu, palette.accent, 1.15, 0, true)
+registerTheme(UI.contextMenu, "BackgroundColor3", "panel")
+addDropShadow(UI.contextMenu, 5, 10, 0.74)
+
+local function makeContextAction(name, text, iconName, y, textRole, iconRole)
+    local btn = button(UI.contextMenu, "", UDim2.fromOffset(6, y), UDim2.new(1, -12, 0, 30), {
+        bgRole = "panel", textRole = textRole or "text", textSize = 10, radius = 7, z = 152,
+    })
+    btn.Name = name
+    local icon = drawIcon(btn, iconName, UDim2.fromOffset(8, 5), UDim2.fromOffset(19, 19), palette[iconRole or "accent"] or palette.accent, 154)
+    local caption = label(btn, text, 10, textRole or "text", UDim2.fromOffset(36, 0), UDim2.new(1, -42, 1, 0), {
+        truncate = true, z = 154,
+    })
+    return btn, icon, caption
+end
+
+UI.contextFav, UI.contextFavIcon, UI.contextFavLabel = makeContextAction("ContextFavorite", "Yêu thích", "heart", 6, "text", "accent")
+UI.contextPin, UI.contextPinIcon, UI.contextPinLabel = makeContextAction("ContextPin", "Ghim lên đầu Yêu thích", "pin", 6, "text", "accent2")
+UI.contextRename, UI.contextRenameIcon, UI.contextRenameLabel = makeContextAction("ContextRename", "Đổi tên", "edit", 6, "text", "accent2")
+UI.contextGenre, UI.contextGenreIcon, UI.contextGenreLabel = makeContextAction("ContextGenre", "Đổi thể loại", "grid", 6, "text", "accent2")
+UI.contextAdd, UI.contextAddIcon, UI.contextAddLabel = makeContextAction("ContextAdd", "Thêm ID nhạc", "plusCircle", 6, "text", "accent2")
+UI.contextDelete, UI.contextDeleteIcon, UI.contextDeleteLabel = makeContextAction("ContextDelete", "Xóa khỏi danh sách", "close", 6, "danger", "danger")
+UI.contextAnchor = nil
+local contextActions = { UI.contextFav, UI.contextPin, UI.contextRename, UI.contextGenre, UI.contextAdd, UI.contextDelete }
+local function layoutContextMenu(track)
+    local visible = {
+        UI.contextFav, UI.contextPin,
+        UI.contextRename,
+        UI.contextGenre, UI.contextAdd, UI.contextDelete,
+    }
+    UI.contextRename.Visible = track.Custom == true
+    UI.contextDelete.Visible = not track.Demo
+    local count = 0
+    for _, action in ipairs(visible) do
+        if action == UI.contextRename and track.Custom ~= true then
+            action.Visible = false
+        elseif action == UI.contextDelete and track.Demo then
+            action.Visible = false
+        else
+            action.Visible = true
+            action.Position = UDim2.fromOffset(6, 6 + count * 31)
+            action.Size = UDim2.new(1, -12, 0, 28)
+            count += 1
+        end
+    end
+    UI.contextMenu.Size = UDim2.fromOffset(220, 12 + count * 31)
+end
+
+local function openTrackMenu(track, anchor)
+    if not track or not anchor or not anchor.Parent then return end
+    if UI.contextMenu.Visible and UI.contextTarget == track then
+        UI.contextMenu.Visible = false
+        UI.contextTarget, UI.contextAnchor = nil, nil
+        return
+    end
+    UI.contextTarget = track
+    UI.contextAnchor = anchor
+    UI.contextFavLabel.Text = track.Favorite and "Bỏ yêu thích" or "Yêu thích"
+    UI.contextPinLabel.Text = track.Pinned and "Bỏ ghim khỏi Yêu thích" or "Ghim lên đầu Yêu thích"
+    UI.contextDelete.Visible = not track.Demo
+    layoutContextMenu(track)
+
+    local viewport = Workspace.CurrentCamera and Workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
+    local menuWidth = 220
+    local menuHeight = UI.contextMenu.Size.Y.Offset
+
+    local point = anchor.AbsolutePosition
+    local anchorRight = point.X + anchor.AbsoluteSize.X
+    -- Prefer placing the menu immediately to the left of the row's ellipsis, inside the viewport.
+    local x = anchorRight - menuWidth
+    if x < 6 then x = anchorRight + 6 end
+    x = math.clamp(x, 6, math.max(6, viewport.X - menuWidth - 6))
+
+    local y = point.Y + anchor.AbsoluteSize.Y + 5
+    if y + menuHeight > viewport.Y - 6 then y = point.Y - menuHeight - 5 end
+    y = math.clamp(y, 6, math.max(6, viewport.Y - menuHeight - 6))
+    UI.contextMenu.Position = UDim2.fromOffset(x, y)
+    UI.contextMenu.Visible = true
+end
+controls.openTrackMenu = openTrackMenu
+UserInputService.InputBegan:Connect(function(input, processed)
+    if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == Enum.KeyCode.Escape then
+        if UI.contextMenu.Visible then
+            UI.contextMenu.Visible = false
+            UI.contextTarget, UI.contextAnchor = nil, nil
+        elseif UI.modalBorder.Visible then
+            closeModal()
+        end
+        return
+    end
+    if not UI.contextMenu.Visible then return end
+    if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
+    local point = input.Position
+    local menuPos, menuSize = UI.contextMenu.AbsolutePosition, UI.contextMenu.AbsoluteSize
+    local inMenu = point.X >= menuPos.X and point.X <= menuPos.X + menuSize.X and point.Y >= menuPos.Y and point.Y <= menuPos.Y + menuSize.Y
+    local anchor = UI.contextAnchor
+    local inAnchor = false
+    if anchor and anchor.Parent then
+        local anchorPos, anchorSize = anchor.AbsolutePosition, anchor.AbsoluteSize
+        inAnchor = point.X >= anchorPos.X and point.X <= anchorPos.X + anchorSize.X and point.Y >= anchorPos.Y and point.Y <= anchorPos.Y + anchorSize.Y
+    end
+    if not inMenu and not inAnchor then
+        UI.contextMenu.Visible = false
+        UI.contextTarget, UI.contextAnchor = nil, nil
+    end
+end)
+UI.contextFav.Activated:Connect(function()
+    if UI.contextTarget then
+        UI.contextTarget.Favorite = not UI.contextTarget.Favorite
+        if not UI.contextTarget.Favorite then UI.contextTarget.Pinned = false end
+        local nowFavorite = UI.contextTarget.Favorite
+        UI.contextMenu.Visible = false
+        refreshAll()
+        if controls.saveConfig then controls.saveConfig(true) end
+        showToast(nowFavorite and "Đã thêm vào Yêu thích" or "Đã bỏ khỏi Yêu thích")
+    end
+end)
+UI.contextPin.Activated:Connect(function()
+    local target = UI.contextTarget
+    if not target then UI.contextMenu.Visible = false; return end
+    target.Pinned = not (target.Pinned == true)
+    if target.Pinned then target.Favorite = true end
+    local pinned = target.Pinned
+    UI.contextMenu.Visible = false
+    UI.contextTarget, UI.contextAnchor = nil, nil
+    refreshAll()
+    if controls.saveConfig then controls.saveConfig(true) end
+    showToast(pinned and "Đã ghim lên đầu tab Yêu thích" or "Đã bỏ ghim bài hát")
+end)
+UI.contextRename.Activated:Connect(function()
+    local target = UI.contextTarget
+    UI.contextMenu.Visible = false
+    if target and target.Custom == true then controls.showModal("Rename", target) end
+end)
+UI.contextGenre.Activated:Connect(function()
+    local target = UI.contextTarget
+    UI.contextMenu.Visible = false
+    if target then controls.showModal("Genre", target) end
+end)
+UI.contextAdd.Activated:Connect(function() UI.contextMenu.Visible = false; controls.showModal("Add") end)
+UI.contextDelete.Activated:Connect(function()
+    local target = UI.contextTarget
+    if target and not target.Demo then
+        local deletedId = target.Id
+        for i = #tracks, 1, -1 do
+            if tracks[i].Id == deletedId then table.remove(tracks, i); break end
+        end
+        state.deletedIds[deletedId] = true
+        if state.selectedId == deletedId then
+            if musicSound and musicSoundId == deletedId then stopPlayback(true, true) end
+            state.selectedId = tracks[1] and tracks[1].Id or ""
+            state.progress = 0
+            if #tracks == 0 then state.playing = false end
+        end
+        UI.contextMenu.Visible = false
+        refreshAll()
+        if controls.saveConfig then controls.saveConfig(true) end
+        showToast("Đã xóa khỏi thư viện")
+    end
+end)
+
+local function updateProgressFromX(track, x)
+    local w = track.AbsoluteSize.X
+    local currentTrack = selectedTrack()
+    if w <= 0 or not musicSound or musicSoundId ~= currentTrack.Id or not musicSound.IsLoaded then return end
+    local duration = math.max(0, tonumber(musicSound.TimeLength) or tonumber(currentTrack.Duration) or 0)
+    if duration <= 0 then return end
+    local ratio = math.clamp((x - track.AbsolutePosition.X) / w, 0, 1)
+    local targetPosition = duration * ratio
+    local ok = pcall(function() musicSound.TimePosition = targetPosition end)
+    if ok then
+        state.progress = targetPosition
+        updateProgressDisplay()
+    end
+end
+local function updateMusicVolumeFromX(track, x)
+    local w = track.AbsoluteSize.X
+    if w <= 0 then return end
+    state.musicVolume = math.floor(math.clamp((x - track.AbsolutePosition.X) / w, 0, 1) * 100 + 0.5)
+    if musicSound and musicSound.Parent then
+        pcall(function() musicSound.Volume = state.musicVolume / 100 end)
+    end
+    refreshVolume()
+end
+local function updateGameVolumeFromX(track, x)
+    local w = track.AbsoluteSize.X
+    if w <= 0 then return end
+    state.gameVolume = math.floor(math.clamp((x - track.AbsolutePosition.X) / w, 0, 1) * 100 + 0.5)
+    if controls.applyGameVolume then controls.applyGameVolume() end
+    refreshVolume()
+end
+local function attachSliderTrack(track, kind)
+    track.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            if kind == "seek" and not (musicSound and musicSoundId == selectedTrack().Id and musicSound.IsLoaded) then
+                showToast("Hãy phát bài và đợi tải xong trước khi tua")
+                return
+            end
+            dragOperation = { kind = kind, input = input, track = track }
+            if kind == "music" then updateMusicVolumeFromX(track, input.Position.X) end
+            if kind == "gameVolume" then updateGameVolumeFromX(track, input.Position.X) end
+            if kind == "seek" then updateProgressFromX(track, input.Position.X) end
+        end
+    end)
+end
+local settingsTab = "Giao diện"
+
+for _, track in ipairs({ UI.fullVolumeTrack, UI.miniVolumeTrack, UI.bgVolumeTrack }) do attachSliderTrack(track, "music") end
+attachSliderTrack(UI.bgGameVolumeTrack, "gameVolume")
+for _, track in ipairs({ UI.fullSeekTrack, UI.miniSeekTrack, UI.bgSeekTrack }) do attachSliderTrack(track, "seek") end
+
+moveSelection = function(delta)
+    -- Previous/Next follows the visible queue. Shuffle chooses a different random track.
+    local mode = state.mode == "Full" and "Full" or "Mini"
+    local candidates = filteredTracks(mode)
+    if #candidates == 0 then candidates = tracks end
+    if #candidates == 0 then showToast("Thư viện hiện chưa có bài"); return end
+
+    local currentIndex
+    for i, track in ipairs(candidates) do
+        if track.Id == state.selectedId then currentIndex = i; break end
+    end
+    if state.shuffle and delta > 0 and #candidates > 1 then
+        local options = {}
+        for _, candidate in ipairs(candidates) do
+            if candidate.Id ~= state.selectedId then table.insert(options, candidate) end
+        end
+        if #options > 0 then selectTrack(options[math.random(1, #options)]) end
+        return
+    end
+    if not currentIndex then currentIndex = (delta > 0) and 0 or 1 end
+    currentIndex = ((currentIndex - 1 + delta) % #candidates) + 1
+    selectTrack(candidates[currentIndex])
+end
+
+advancePlayback = function()
+    if #tracks == 0 then stopPlayback(true, true); showToast("Thư viện hiện chưa có bài"); return end
+    if state.shuffle then
+        local candidates = filteredTracks(state.mode == "Full" and "Full" or "Mini")
+        if #candidates == 0 then candidates = tracks end
+        local options = {}
+        for _, candidate in ipairs(candidates) do
+            if candidate.Id ~= state.selectedId then table.insert(options, candidate) end
+        end
+        if #options > 0 then selectTrack(options[math.random(1, #options)]) end
+    else
+        moveSelection(1)
+    end
+    if state.selectedId ~= "" then playTrack(selectedTrack()) end
+end
+
+local function togglePlaying()
+    local track = selectedTrack()
+    if not track or track.Id == "" then
+        showToast("Hãy chọn một bài hát trước")
+        return
+    end
+
+    if musicSound and musicSoundId == track.Id then
+        if state.playing then
+            state.playing = false
+            if musicSound.IsPlaying then pcall(function() musicSound:Pause() end) end
+            state.progress = tonumber(musicSound.TimePosition) or state.progress
+            playbackStatus = "Paused"
+            refreshAll(false)
+            showToast("Đã tạm dừng")
+        else
+            state.playing = true
+            if not musicSound.IsLoaded then
+                playbackStatus = "Loading"
+                refreshAll(false)
+                showToast("Đang chờ âm thanh tải…")
+                return
+            end
+
+            local resumed, resumeError = pcall(function() musicSound:Play() end)
+            if not resumed then
+                failPlayback(playbackGeneration, musicSound, "Không thể tiếp tục phát: " .. tostring(resumeError))
+                return
+            end
+            playbackStatus = "Loading"
+            refreshAll(false)
+            local expectedSound = musicSound
+            local expectedGeneration = playbackGeneration
+            task.delay(0.4, function()
+                if expectedGeneration ~= playbackGeneration or musicSound ~= expectedSound then return end
+                if state.playing and expectedSound.IsPlaying then
+                    playbackStatus = "Playing"
+                    refreshAll(false)
+                    showToast("Đang phát: " .. track.Title)
+                elseif state.playing then
+                    failPlayback(expectedGeneration, expectedSound, "Đã gọi Play nhưng Roblox không phát được ID này. Kiểm tra quyền audio của trải nghiệm.")
+                end
+            end)
+        end
+    else
+        playTrack(track)
+    end
+end
+
+local function toggleShuffle()
+    state.shuffle = not state.shuffle
+    refreshTrackMetadata()
+    scheduleAutoSave()
+    showToast(state.shuffle and "Đã bật phát ngẫu nhiên" or "Đã tắt phát ngẫu nhiên")
+end
+local function toggleRepeat()
+    state.repeatOn = not state.repeatOn
+    if musicSound then pcall(function() musicSound.Looped = state.repeatOn end) end
+    refreshTrackMetadata()
+    scheduleAutoSave()
+    showToast(state.repeatOn and "Đã bật lặp bài" or "Đã tắt lặp bài")
+end
+for _, btn in ipairs({ UI.fullPlay, UI.miniPlay, UI.bgPlay }) do btn.Activated:Connect(togglePlaying) end
+for _, btn in ipairs({ UI.fullPrev, UI.miniPrev, UI.bgPrev }) do btn.Activated:Connect(function() moveSelection(-1) end) end
+for _, btn in ipairs({ UI.fullNext, UI.miniNext, UI.bgNext }) do btn.Activated:Connect(function() moveSelection(1) end) end
+for _, btn in ipairs({ UI.fullShuffle, UI.bgShuffle }) do btn.Activated:Connect(toggleShuffle) end
+for _, btn in ipairs({ UI.fullRepeat, UI.bgRepeat }) do btn.Activated:Connect(toggleRepeat) end
+UI.fullAddTrackButton.Activated:Connect(function() controls.showModal("Add") end)
+UI.fullSettingsButton.Activated:Connect(function() settingsTab = "Giao diện"; controls.showModal("Settings") end)
+UI.miniSettingsButton.Activated:Connect(function() settingsTab = "Giao diện"; controls.showModal("Settings") end)
+UI.bgSettingsButton.Activated:Connect(function() settingsTab = "Giao diện"; controls.showModal("Settings") end)
+UI.fullVolumeIcon.Activated:Connect(function() settingsTab = "Âm thanh"; controls.showModal("Settings") end)
+UI.miniVolumeIcon.Activated:Connect(function() settingsTab = "Âm thanh"; controls.showModal("Settings") end)
+UI.bgVolumeIcon.Activated:Connect(function() settingsTab = "Âm thanh"; controls.showModal("Settings") end)
+UI.bgGameVolumeIcon.Activated:Connect(function() settingsTab = "Âm thanh"; controls.showModal("Settings") end)
+UI.fullLogo.Activated:Connect(function() controls.showModal("Menu") end)
+UI.fullTitle.InputBegan:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then controls.showModal("Menu") end end)
+UI.fullDynamicButton.Activated:Connect(function() setMode("Background") end)
+UI.fullMiniButton.Activated:Connect(function() setMode("Mini") end)
+UI.fullHideButton.Activated:Connect(hideUI)
+UI.miniDynamicButton.Activated:Connect(function() setMode("Background") end)
+UI.miniModeButton.Activated:Connect(function() setMode("Full") end)
+UI.miniHideButton.Activated:Connect(hideUI)
+UI.miniTrackTitle.InputBegan:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then setMode("Full") end end)
+UI.miniCover.InputBegan:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then setMode("Full") end end)
+UI.bgMenuButton.Activated:Connect(function() controls.showModal("Menu") end)
+UI.bgCloseButton.Activated:Connect(hideUI)
+UI.miniSearchClear.Activated:Connect(function()
+    state.miniQuery = ""; state.miniGenre = nil; UI.miniSearch.Text = ""; refreshLists()
+end)
+UI.fullSearch:GetPropertyChangedSignal("Text"):Connect(function() state.fullQuery = UI.fullSearch.Text; refreshLists() end)
+UI.miniSearch:GetPropertyChangedSignal("Text"):Connect(function()
+    state.miniQuery = UI.miniSearch.Text
+    if string.gsub(state.miniQuery, "%s", "") ~= "" then state.miniGenre = nil end
+    refreshLists()
+end)
+
+-- =============================== MODALS ===============================
+local function wipeModalBody()
+    for _, child in ipairs(UI.modalBody:GetChildren()) do child:Destroy() end
+end
+local function makeActionButton(parent, text, x, y, w, callback, role)
+    return button(parent, text, UDim2.fromOffset(x, y), UDim2.fromOffset(w, 29), { bgRole = role or "surface", textRole = "text", textSize = 9, radius = 7, stroke = true, strokeWidth = 0.8, z = 105, onClick = callback })
+end
+local function createTextBox(parent, placeholder, y, defaultText)
+    local box = make("TextBox", parent, {
+        Position = UDim2.fromOffset(10, y), Size = UDim2.new(1, -20, 0, 35),
+        BackgroundColor3 = palette.deep, BorderSizePixel = 0, ClearTextOnFocus = false,
+        Font = Enum.Font.Gotham, Text = defaultText or "", PlaceholderText = placeholder,
+        PlaceholderColor3 = palette.muted, TextColor3 = palette.text, TextSize = 10,
+        TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 105,
+    })
+    addCorner(box, 8)
+    local inputStroke = addStroke(box, palette.border, 1, 0, false)
+    registerTheme(inputStroke, "Color", "border")
+    make("UIPadding", box, { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) })
+    registerTheme(box, "BackgroundColor3", "deep"); registerTheme(box, "TextColor3", "text"); registerTheme(box, "PlaceholderColor3", "muted")
+    return box
+end
+
+local function setSliderVisual(objects, ratio)
+    ratio = math.clamp(ratio, 0, 1)
+    objects.fill.Size = UDim2.new(ratio, 0, 1, 0)
+    objects.knob.Position = UDim2.new(ratio, 0, 0.5, 0)
+    objects.value.Text = objects.format(ratio)
+end
+
+local function createModalSlider(parent, y, caption, initial, formatFn, callback, accentRole)
+    label(parent, caption, 9, "muted", UDim2.fromOffset(10, y), UDim2.new(1, -66, 0, 15), { font = Enum.Font.GothamSemibold, z = 105 })
+    local value = label(parent, formatFn(initial), 9, "text", UDim2.new(1, -57, 0, y), UDim2.fromOffset(44, 15), { align = Enum.TextXAlignment.Right, z = 105 })
+    local track = button(parent, "", UDim2.fromOffset(10, y + 18), UDim2.new(1, -20, 0, 16), { bgRole = "deep", textRole = "text", radius = 4, z = 105, noMotion = true })
+    track.BackgroundTransparency = 1
+    local rail = make("Frame", track, { Position = UDim2.new(0, 0, 0.5, -2), Size = UDim2.new(1, 0, 0, 4), BackgroundColor3 = palette.border, BorderSizePixel = 0, ZIndex = 106 })
+    addCorner(rail, 4); registerTheme(rail, "BackgroundColor3", "border")
+    local fill = make("Frame", rail, { Size = UDim2.new(initial, 0, 1, 0), BackgroundColor3 = palette[accentRole or "accent"], BorderSizePixel = 0, ZIndex = 107 })
+    addCorner(fill, 4); registerTheme(fill, "BackgroundColor3", accentRole or "accent")
+    local knob = make("Frame", rail, { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(initial, 0, 0.5, 0), Size = UDim2.fromOffset(9, 9), BackgroundColor3 = palette.text, BorderSizePixel = 0, ZIndex = 108 })
+    addCorner(knob, 5); registerTheme(knob, "BackgroundColor3", "text")
+    local obj = { track = track, fill = fill, knob = knob, value = value, format = formatFn }
+    local function updateFromX(x)
+        local ratio = math.clamp((x - track.AbsolutePosition.X) / math.max(1, track.AbsoluteSize.X), 0, 1)
+        setSliderVisual(obj, ratio)
+        callback(ratio)
+    end
+    track.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragOperation = { kind = "modalSlider", input = input, track = track, callback = updateFromX }
+            updateFromX(input.Position.X)
+        end
+    end)
+    setSliderVisual(obj, initial)
+    return obj
+end
+
+local function createSettingsModal()
+    -- Two-column settings sheet matching the concept board: a stable navigation rail
+    -- and one content surface, so controls never fight for the same coordinates.
+    UI.modalBorder.Size = UDim2.fromOffset(438, 430)
+    UI.modalTitle.Text = "Cài đặt & chức năng"
+
+    local rail = make("Frame", UI.modalBody, {
+        Name = "SettingsNavigation", Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(105, 366),
+        BackgroundColor3 = palette.panel, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 104,
+    })
+    addCorner(rail, 10); registerTheme(rail, "BackgroundColor3", "panel")
+    local railStroke = addStroke(rail, palette.border, 0.9, 0.08, false)
+    registerTheme(railStroke, "Color", "border")
+    label(rail, "DUNGDX", 10, "text", UDim2.fromOffset(9, 6), UDim2.new(1, -18, 0, 20), { font = Enum.Font.GothamBold, z = 105 })
+    label(rail, "PLAYER SETTINGS", 7, "muted", UDim2.fromOffset(9, 24), UDim2.new(1, -18, 0, 14), { font = Enum.Font.GothamSemibold, z = 105 })
+
+    local content = make("Frame", UI.modalBody, {
+        Name = "SettingsContent", Position = UDim2.fromOffset(115, 0), Size = UDim2.new(1, -115, 1, 0),
+        BackgroundColor3 = palette.panel, BorderSizePixel = 0, ClipsDescendants = true, ZIndex = 104,
+    })
+    addCorner(content, 10); registerTheme(content, "BackgroundColor3", "panel")
+    local contentStroke = addStroke(content, palette.border, 0.9, 0.08, false)
+    registerTheme(contentStroke, "Color", "border")
+
+    local tabDefinitions = {
+        { name = "Thông tin", icon = "user" },
+        { name = "Giao diện", icon = "grid" },
+        { name = "Âm thanh", icon = "speaker" },
+        { name = "Khác", icon = "spark" },
+    }
+    for i, tab in ipairs(tabDefinitions) do
+        local y = 47 + (i - 1) * 36
+        local active = settingsTab == tab.name
+        local tabBtn = button(rail, "", UDim2.fromOffset(5, y), UDim2.new(1, -10, 0, 31), {
+            bgRole = active and "selected" or "panel", textRole = "text", radius = 7,
+            stroke = active, strokeWidth = 0.9, gradientStroke = active, z = 105,
+        })
+        drawIcon(tabBtn, tab.icon, UDim2.fromOffset(7, 6), UDim2.fromOffset(18, 19), active and palette.text or palette.muted, 107)
+        label(tabBtn, tab.name, 9, active and "text" or "muted", UDim2.fromOffset(30, 0), UDim2.new(1, -34, 1, 0), { truncate = true, z = 107 })
+        tabBtn.Activated:Connect(function()
+            settingsTab = tab.name
+            controls.showModal("Settings")
+        end)
+    end
+
+    local function contentHeading(titleText, helperText)
+        label(content, titleText, 11, "text", UDim2.fromOffset(10, 7), UDim2.new(1, -20, 0, 20), { font = Enum.Font.GothamSemibold, z = 106 })
+        label(content, helperText, 8, "muted", UDim2.fromOffset(10, 26), UDim2.new(1, -20, 0, 17), { truncate = true, z = 106 })
+        local separator = make("Frame", content, { Position = UDim2.fromOffset(10, 46), Size = UDim2.new(1, -20, 0, 1), BackgroundColor3 = palette.border, BorderSizePixel = 0, ZIndex = 105 })
+        registerTheme(separator, "BackgroundColor3", "border")
+    end
+
+    if settingsTab == "Giao diện" then
+        contentHeading("Giao diện & hiệu ứng", "Mọi tùy chỉnh được lưu tự động khi executor hỗ trợ lưu tệp.")
+        label(content, "CHỦ ĐỀ MÀU", 8, "muted", UDim2.fromOffset(10, 50), UDim2.new(1, -20, 0, 14), { font = Enum.Font.GothamSemibold, z = 106 })
+        local themeNames = { "Aurora", "Violet", "Rose", "Ember" }
+        for i, themeName in ipairs(themeNames) do
+            local col = (i - 1) % 2
+            local row = math.floor((i - 1) / 2)
+            local color = COLORS[themeName].accent
+            local btn = button(content, "", UDim2.fromOffset(10 + col * 140, 64 + row * 28), UDim2.fromOffset(132, 24), {
+                bgRole = state.theme == themeName and "selected" or "surface", textRole = "text", radius = 7,
+                stroke = true, strokeWidth = state.theme == themeName and 1.35 or 0.75, gradientStroke = state.theme == themeName, z = 106,
+            })
+            local chip = make("Frame", btn, { Position = UDim2.fromOffset(7, 6), Size = UDim2.fromOffset(12, 12), BackgroundColor3 = color, BorderSizePixel = 0, ZIndex = 108 })
+            addCorner(chip, 6)
+            label(btn, themeName, 9, "text", UDim2.fromOffset(25, 0), UDim2.new(1, -30, 1, 0), { z = 108 })
+            btn.Activated:Connect(function()
+                applyTheme(themeName)
+                if controls.saveConfig then controls.saveConfig(true) end
+                controls.showModal("Settings")
+            end)
+        end
+        local styleBtn = button(content, "", UDim2.fromOffset(10, 124), UDim2.new(1, -20, 0, 27), { bgRole = "surface", textRole = "text", radius = 7, stroke = true, strokeWidth = 0.75, z = 106 })
+        drawIcon(styleBtn, state.visualizerStyle == "Wave" and "pulse" or "vinyl", UDim2.fromOffset(7, 4), UDim2.fromOffset(19, 19), palette.accent, 108)
+        label(styleBtn, state.visualizerStyle == "Wave" and "Biểu tượng phát: SÓNG NHẠC TRÒN" or "Biểu tượng phát: ĐĨA XOAY", 8, "text", UDim2.fromOffset(32, 0), UDim2.new(1, -38, 1, 0), { truncate = true, z = 108 })
+        styleBtn.Activated:Connect(function()
+            state.visualizerStyle = state.visualizerStyle == "Wave" and "Vinyl" or "Wave"
+            updateVisualizerStyle()
+            scheduleAutoSave()
+            controls.showModal("Settings")
+        end)
+        local rotationBtn = button(content, "", UDim2.fromOffset(10, 154), UDim2.new(1, -20, 0, 27), { bgRole = "surface", textRole = "text", radius = 7, stroke = true, strokeWidth = 0.75, z = 106 })
+        drawIcon(rotationBtn, "rotate-cw", UDim2.fromOffset(7, 4), UDim2.fromOffset(19, 19), palette.accent2, 108)
+        label(rotationBtn, state.motion and "Xoay hình tròn khi phát: BẬT" or "Xoay hình tròn khi phát: TẮT", 8, "text", UDim2.fromOffset(32, 0), UDim2.new(1, -38, 1, 0), { z = 108 })
+        rotationBtn.Activated:Connect(function()
+            state.motion = not state.motion
+            syncVinylSpins()
+            scheduleAutoSave()
+            controls.showModal("Settings")
+        end)
+        local rgbBtn = button(content, "", UDim2.fromOffset(10, 184), UDim2.new(1, -20, 0, 25), { bgRole = state.rgbEnabled and "selected" or "surface", textRole = "text", radius = 7, stroke = true, strokeWidth = 0.75, z = 106 })
+        drawIcon(rgbBtn, "palette", UDim2.fromOffset(7, 3), UDim2.fromOffset(18, 18), palette.accent, 108)
+        label(rgbBtn, state.rgbEnabled and "RGB tương thích Theme: BẬT" or "RGB tương thích Theme: TẮT", 8, "text", UDim2.fromOffset(32, 0), UDim2.new(1, -38, 1, 0), { z = 108 })
+        rgbBtn.Activated:Connect(function()
+            state.rgbEnabled = not state.rgbEnabled
+            applyRGBFrame()
+            scheduleAutoSave()
+            controls.showModal("Settings")
+        end)
+        createModalSlider(content, 211, "ĐỘ TRONG SUỐT UI", math.clamp(state.uiTransparency / 0.8, 0, 1), function(r) return tostring(math.floor(r * 80 + 0.5)) .. "%" end, function(r)
+            state.uiTransparency = r * 0.8
+            applyUITransparency()
+            scheduleAutoSave()
+        end, "accent")
+        createModalSlider(content, 245, "TỐC ĐỘ CHUYỂN RGB", state.rgbSpeed, function(r) return tostring(math.floor(r * 100 + 0.5)) .. "%" end, function(r)
+            state.rgbSpeed = r
+            scheduleAutoSave()
+        end, "accent2")
+        createModalSlider(content, 279, "ĐỘ SÁNG RGB", state.rgbBrightness, function(r) return tostring(math.floor(r * 100 + 0.5)) .. "%" end, function(r)
+            state.rgbBrightness = r
+            scheduleAutoSave()
+        end, "accent")
+        createModalSlider(content, 313, "KÍCH THƯỚC UI HIỆN TẠI", math.clamp((state.scales[state.mode] - MIN_UI_SCALE) / (MAX_UI_SCALE - MIN_UI_SCALE), 0, 1), function(r) return tostring(math.floor((MIN_UI_SCALE + r * (MAX_UI_SCALE - MIN_UI_SCALE)) * 100 + 0.5)) .. "%" end, function(r)
+            state.scales[state.mode] = MIN_UI_SCALE + r * (MAX_UI_SCALE - MIN_UI_SCALE)
+            applyModeGeometry(state.mode)
+            scheduleAutoSave()
+        end, "accent")
+    elseif settingsTab == "Âm thanh" then
+        contentHeading("Âm thanh", "Âm lượng nhạc và âm thanh game là hai mức độc lập.")
+        createModalSlider(content, 61, "ÂM LƯỢNG NHẠC", state.musicVolume / 100, function(r) return tostring(math.floor(r * 100 + 0.5)) .. "%" end, function(r)
+            state.musicVolume = math.floor(r * 100 + 0.5)
+            refreshVolume()
+            scheduleAutoSave()
+        end, "accent")
+        createModalSlider(content, 111, "ÂM THANH GAME", state.gameVolume / 100, function(r) return tostring(math.floor(r * 100 + 0.5)) .. "%" end, function(r)
+            state.gameVolume = math.floor(r * 100 + 0.5)
+            if controls.applyGameVolume then controls.applyGameVolume() end
+            refreshVolume()
+            scheduleAutoSave()
+        end, "accent2")
+        label(content, "Nhạc phát trên thiết bị của bạn. Một số audio cần được chủ sở hữu cấp quyền cho trải nghiệm.", 8, "muted", UDim2.fromOffset(10, 158), UDim2.new(1, -20, 0, 33), { wrapped = true, z = 106 })
+        makeActionButton(content, "LƯU CÀI ĐẶT", 10, 211, 132, function() controls.saveConfig() end, "selected")
+        makeActionButton(content, "TẢI BẢN LƯU", 150, 211, 132, function() controls.loadConfig() end, "surface")
+    elseif settingsTab == "Thông tin" then
+        contentHeading("Dungdx Music Player", "Thư viện nhạc · giao diện ba chế độ · tùy chỉnh thể loại")
+        local infoCard = make("Frame", content, { Position = UDim2.fromOffset(10, 56), Size = UDim2.new(1, -20, 0, 84), BackgroundColor3 = palette.deep, BorderSizePixel = 0, ZIndex = 105 })
+        addCorner(infoCard, 9); registerTheme(infoCard, "BackgroundColor3", "deep")
+        local infoStroke = addStroke(infoCard, palette.border, 0.8, 0.1, false); registerTheme(infoStroke, "Color", "border")
+        drawIcon(infoCard, "vinyl", UDim2.fromOffset(12, 14), UDim2.fromOffset(48, 48), palette.accent, 108)
+        label(infoCard, "DUNGDX MUSIC PLAYER", 10, "text", UDim2.fromOffset(70, 14), UDim2.new(1, -80, 0, 18), { font = Enum.Font.GothamBold, z = 108, shadow = true })
+        label(infoCard, tostring(#tracks) .. " bài trong thư viện", 8, "muted", UDim2.fromOffset(70, 35), UDim2.new(1, -80, 0, 14), { z = 108 })
+        label(infoCard, "Tác giả không hiển thị trong danh sách.", 8, "muted", UDim2.fromOffset(70, 51), UDim2.new(1, -80, 0, 14), { z = 108 })
+        makeActionButton(content, "THÊM ID NHẠC", 10, 153, 272, function() controls.showModal("Add") end, "selected")
+        makeActionButton(content, "ĐỔI THỂ LOẠI BÀI ĐANG CHỌN", 10, 188, 272, function() controls.showModal("Genre", selectedTrack()) end, "surface")
+        makeActionButton(content, "LƯU CẤU HÌNH", 10, 223, 132, function() controls.saveConfig() end, "surface")
+        makeActionButton(content, "TẢI CẤU HÌNH", 150, 223, 132, function() controls.loadConfig() end, "surface")
+    else
+        contentHeading("Khác", "Các lối tắt thao tác giao diện.")
+        makeActionButton(content, "MỞ GIAO DIỆN ĐẦY ĐỦ", 10, 60, 272, function() setMode("Full") end, state.mode == "Full" and "selected" or "surface")
+        makeActionButton(content, "CHUYỂN SANG THU NHỎ", 10, 95, 272, function() setMode("Mini") end, state.mode == "Mini" and "selected" or "surface")
+        makeActionButton(content, "PHÁT Ở DYNAMIC", 10, 130, 272, function() setMode("Background") end, state.mode == "Background" and "selected" or "surface")
+        makeActionButton(content, "ẨN UI · AVATAR ĐỂ MỞ LẠI", 10, 165, 272, function() hideUI() end, "surface")
+        makeActionButton(content, "LƯU CẤU HÌNH", 10, 200, 132, function() controls.saveConfig() end, "surface")
+        makeActionButton(content, "TẢI CẤU HÌNH", 150, 200, 132, function() controls.loadConfig() end, "surface")
+    end
+end
+
+local function createGenreModal()
+    local target = UI.modalTarget
+    if not target then
+        closeModal()
+        showToast("Chưa chọn bài hát để đổi thể loại")
+        return
+    end
+    UI.modalBorder.Size = UDim2.fromOffset(340, 300)
+    UI.modalTitle.Text = "Đổi thể loại bài hát"
+    label(UI.modalBody, target.Title, 10, "text", UDim2.fromOffset(10, 0), UDim2.new(1, -20, 0, 19), { font = Enum.Font.GothamSemibold, truncate = true, z = 105 })
+    label(UI.modalBody, "ID: " .. target.Id .. "  ·  Hiện tại: " .. tostring(target.Genre), 8, "muted", UDim2.fromOffset(10, 21), UDim2.new(1, -20, 0, 16), { truncate = true, z = 105 })
+    label(UI.modalBody, "Chọn thể loại mới:", 9, "muted", UDim2.fromOffset(10, 42), UDim2.new(1, -20, 0, 16), { z = 105 })
+    local positions = {
+        ["V-Pop"] = {10, 64}, ["Rap / Hip-hop"] = {161, 64},
+        ["EDM"] = {10, 98}, ["Lofi"] = {161, 98},
+        ["Remix"] = {10, 132}, ["Khác"] = {161, 132},
+    }
+    for _, genre in ipairs(GENRES) do
+        local pos = positions[genre]
+        local selected = target.Genre == genre
+        local btn = button(UI.modalBody, genre, UDim2.fromOffset(pos[1], pos[2]), UDim2.fromOffset(143, 29), {
+            bgRole = selected and "selected" or "surface", textRole = "text", textSize = 9,
+            radius = 7, stroke = true, strokeWidth = selected and 1.4 or 0.8, z = 105,
+        })
+        local color = GENRE_COLORS[genre] or palette.accent
+        btn.TextColor3 = color
+        local stroke = btn:FindFirstChildOfClass("UIStroke")
+        if stroke then stroke.Color = color end
+        btn.Activated:Connect(function()
+            local current = UI.modalTarget
+            if not current then return end
+            local oldGenre = current.Genre
+            current.Genre = genre
+            -- If the user was viewing the category the track just left, follow it to the new category
+            -- so the row does not appear to disappear unexpectedly.
+            if state.page == "Genre" and state.genre == oldGenre then state.genre = genre end
+            if state.miniGenre == oldGenre then state.miniGenre = genre end
+            closeModal()
+            refreshAll()
+            if controls.saveConfig then controls.saveConfig(true) end
+            showToast(oldGenre == genre and "Bài hát đã ở thể loại này" or ("Đã chuyển sang " .. genre))
+        end)
+    end
+    makeActionButton(UI.modalBody, "HỦY", 10, 174, 294, closeModal, "surface")
+end
+
+local function createAddModal()
+    UI.modalBorder.Size = UDim2.fromOffset(340, 365)
+    UI.modalTitle.Text = "Thêm ID nhạc của tôi"
+    label(UI.modalBody, "Nhập ID và tên bài hát. Tác giả không được hiển thị.", 9, "muted", UDim2.fromOffset(10, 0), UDim2.new(1, -20, 0, 18), { z = 105 })
+    local idBox = createTextBox(UI.modalBody, "ID nhạc (chỉ chữ số)...", 22, "")
+    local titleBox = createTextBox(UI.modalBody, "Tên bài hát...", 62, "")
+    label(UI.modalBody, "THỂ LOẠI", 9, "muted", UDim2.fromOffset(10, 101), UDim2.new(1, -20, 0, 16), { font = Enum.Font.GothamSemibold, z = 105 })
+    local addGenre = (state.genre and state.page == "Genre" and state.genre) or "Khác"
+    local positions = {
+        ["V-Pop"] = {10, 122}, ["Rap / Hip-hop"] = {161, 122},
+        ["EDM"] = {10, 156}, ["Lofi"] = {161, 156},
+        ["Remix"] = {10, 190}, ["Khác"] = {161, 190},
+    }
+    local genreButtons = {}
+    local function paintGenreButtons()
+        for _, genre in ipairs(GENRES) do
+            local b = genreButtons[genre]
+            if b then
+                local selected = genre == addGenre
+                b.BackgroundColor3 = selected and palette.selected or palette.surface
+                b.TextColor3 = GENRE_COLORS[genre] or palette.text
+                local stroke = b:FindFirstChildOfClass("UIStroke")
+                if stroke then stroke.Color = selected and (GENRE_COLORS[genre] or palette.accent) or palette.border end
+            end
+        end
+    end
+    for _, genre in ipairs(GENRES) do
+        local pos = positions[genre]
+        local b = button(UI.modalBody, genre, UDim2.fromOffset(pos[1], pos[2]), UDim2.fromOffset(143, 29), {
+            bgRole = "surface", textRole = "text", textSize = 9, radius = 7,
+            stroke = true, strokeWidth = 0.9, z = 105,
+        })
+        genreButtons[genre] = b
+        b.Activated:Connect(function() addGenre = genre; paintGenreButtons() end)
+    end
+    paintGenreButtons()
+    makeActionButton(UI.modalBody, "THÊM VÀO NHẠC CỦA TÔI", 10, 228, 294, function()
+        local id = string.gsub(idBox.Text, "%s", "")
+        if id == "" or not string.match(id, "^%d+$") then showToast("ID phải chỉ gồm chữ số"); return end
+        if findTrack(id) then showToast("ID này đã có trong thư viện"); return end
+        local title = string.gsub(titleBox.Text, "^%s*(.-)%s*$", "%1")
+        if title == "" then title = "Bài nhạc " .. id end
+        state.deletedIds[id] = nil
+        table.insert(tracks, { Id = id, Title = title, Duration = 0, Genre = addGenre, Favorite = false, Pinned = false, Custom = true, Demo = false })
+        state.selectedId = id; state.progress = 0; addRecent(id)
+        state.page = "Mine"; state.genre = nil; state.miniGenre = nil
+        state.fullQuery = ""; state.miniQuery = ""
+        UI.fullSearch.Text = ""; UI.miniSearch.Text = ""
+        closeModal(); refreshAll()
+        if controls.saveConfig then controls.saveConfig(true) end
+        showToast("Đã thêm vào Nhạc của tôi · " .. addGenre)
+    end, "selected")
+    makeActionButton(UI.modalBody, "HỦY", 10, 262, 294, closeModal, "surface")
+end
+
+local function createRenameModal()
+    local target = UI.modalTarget
+    if not target or target.Custom ~= true then
+        closeModal()
+        showToast("Chỉ có thể đổi tên bài trong Nhạc của tôi")
+        return
+    end
+    UI.modalBorder.Size = UDim2.fromOffset(340, 205)
+    UI.modalTitle.Text = "Đổi tên bài hát"
+    label(UI.modalBody, "ID: " .. target.Id, 8, "muted", UDim2.fromOffset(10, 2), UDim2.new(1, -20, 0, 16), { truncate = true, z = 105 })
+    local titleBox = createTextBox(UI.modalBody, "Tên bài hát mới...", 25, target.Title)
+    makeActionButton(UI.modalBody, "LƯU TÊN MỚI", 10, 72, 142, function()
+        local current = UI.modalTarget
+        if not current or current.Custom ~= true then closeModal(); return end
+        local newTitle = string.gsub(titleBox.Text or "", "^%s*(.-)%s*$", "%1")
+        if newTitle == "" then showToast("Tên bài hát không được để trống"); return end
+        current.Title = string.sub(newTitle, 1, 80)
+        closeModal()
+        refreshAll()
+        if controls.saveConfig then controls.saveConfig(true) end
+        showToast("Đã đổi tên bài hát")
+    end, "selected")
+    makeActionButton(UI.modalBody, "HỦY", 162, 72, 142, closeModal, "surface")
+end
+
+local function createMenuModal()
+    UI.modalBorder.Size = UDim2.fromOffset(300, 290)
+    UI.modalTitle.Text = "Chế độ giao diện"
+    makeActionButton(UI.modalBody, "1   PHÁT Ở DYNAMIC", 10, 4, 260, function() setMode("Background") end, state.mode == "Background" and "selected" or "surface")
+    makeActionButton(UI.modalBody, "2   CHUYỂN SANG THU NHỎ", 10, 36, 260, function() setMode("Mini") end, state.mode == "Mini" and "selected" or "surface")
+    makeActionButton(UI.modalBody, "3   ẨN UI · CÓ NÚT MỞ LẠI", 10, 68, 260, function() hideUI() end, "surface")
+    makeActionButton(UI.modalBody, "MỞ GIAO DIỆN ĐẦY ĐỦ", 10, 100, 260, function() setMode("Full") end, state.mode == "Full" and "selected" or "surface")
+    makeActionButton(UI.modalBody, "CÀI ĐẶT GIAO DIỆN / ÂM THANH", 10, 132, 260, function() controls.showModal("Settings") end, "surface")
+    makeActionButton(UI.modalBody, "+   THÊM ID NHẠC", 10, 164, 260, function() controls.showModal("Add") end, "surface")
+    makeActionButton(UI.modalBody, "ĐÓNG MENU", 10, 196, 260, closeModal, "surface")
+end
+
+local function fitModalToViewport()
+    local camera = Workspace.CurrentCamera
+    local viewport = camera and camera.ViewportSize or Vector2.new(1280, 720)
+    local width = UI.modalBorder.Size.X.Offset
+    local height = UI.modalBorder.Size.Y.Offset
+    local fit = math.min(1, math.max(1, viewport.X - 24) / math.max(1, width), math.max(1, viewport.Y - 24) / math.max(1, height))
+    UI.modalScale.Scale = math.clamp(fit, 0.6, 1)
+    UI.modalBorder.Position = UDim2.fromScale(0.5, 0.5)
+end
+local function showModal(kind, targetTrack)
+    UI.modalKind = kind
+    UI.modalTarget = (kind == "Genre" or kind == "Rename") and targetTrack or nil
+    UI.contextMenu.Visible = false
+    wipeModalBody()
+    UI.modalBorder.Visible = true
+    UI.overlay.Visible = true
+    if kind == "Settings" then
+        createSettingsModal()
+    elseif kind == "Add" then
+        createAddModal()
+    elseif kind == "Genre" then
+        createGenreModal()
+    elseif kind == "Rename" then
+        createRenameModal()
+    else
+        createMenuModal()
+    end
+    fitModalToViewport()
+    -- ⭐ UPGRADE: ModalEntrance — subtle fade and spring-in without changing modal layout.
+    local targetScale = UI.modalScale.Scale
+    UI.modalBorder.Rotation = -1.1
+    UI.modalScale.Scale = targetScale * 0.92
+    UI.overlay.BackgroundTransparency = 1
+    TweenService:Create(UI.overlay, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        BackgroundTransparency = 0.34,
+    }):Play()
+    TweenService:Create(UI.modalScale, TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+        Scale = targetScale,
+    }):Play()
+    TweenService:Create(UI.modalBorder, TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+        Rotation = 0,
+    }):Play()
+end
+controls.showModal = showModal
+
+-- Debounced autosave prevents rapid slider drags from writing a file on every input event.
+local autoSaveGeneration = 0
+local persistentWarningShown = false
+scheduleAutoSave = function()
+    autoSaveGeneration += 1
+    local generation = autoSaveGeneration
+    task.delay(0.65, function()
+        if generation == autoSaveGeneration and guiAlive and controls.saveConfig then
+            local persistent = controls.saveConfig(true)
+            if persistent == false and not persistentWarningShown then
+                persistentWarningShown = true
+                showToast("Lưu chỉ trong phiên: executor chưa xác nhận được bộ nhớ tệp")
+            end
+        end
+    end)
+end
+
+local function getExecutorFunction(name)
+    local candidate
+    pcall(function()
+        if type(getgenv) == "function" then candidate = getgenv()[name] end
+    end)
+    if type(candidate) ~= "function" then
+        pcall(function()
+            if type(getfenv) == "function" then candidate = getfenv(0)[name] end
+        end)
+    end
+    if type(candidate) ~= "function" then
+        pcall(function() candidate = _G[name] end)
+    end
+    return type(candidate) == "function" and candidate or nil
+end
+
+local function readConfigFile(path, readFn)
+    if not readFn then return nil end
+    local ok, raw = pcall(readFn, path)
+    if not ok or type(raw) ~= "string" or raw == "" then return nil end
+    local decodedOk, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
+    if decodedOk and type(decoded) == "table" then return raw end
+    return nil
+end
+
+local function readPersistentConfig()
+    local readFn = getExecutorFunction("readfile")
+    if not readFn then return nil end
+    return readConfigFile(SAVE_FILE, readFn) or readConfigFile(SAVE_BACKUP_FILE, readFn)
+end
+
+local function saveConfig(silent)
+    local data = {
+        version = 7,
+        theme = state.theme, mode = state.mode, musicVolume = state.musicVolume, gameVolume = state.gameVolume,
+        motion = state.motion, visualizerStyle = state.visualizerStyle, rgbEnabled = state.rgbEnabled,
+        rgbSpeed = state.rgbSpeed, rgbBrightness = state.rgbBrightness, uiTransparency = state.uiTransparency,
+        shuffle = state.shuffle, repeatOn = state.repeatOn,
+        scales = state.scales, page = state.page, genre = state.genre, miniGenre = state.miniGenre,
+        selectedId = state.selectedId, positions = {}, tracks = {}, recent = state.recent, deletedIds = state.deletedIds,
+    }
+    for _, mode in ipairs({ "Full", "Mini", "Background" }) do
+        local position = state.positions[mode]
+        if position then data.positions[mode] = { x = position.X, y = position.Y } end
+    end
+    for _, track in ipairs(tracks) do
+        if not track.Demo then
+            table.insert(data.tracks, {
+                Id = tostring(track.Id), Title = tostring(track.Title), Duration = tonumber(track.Duration) or 0,
+                Genre = track.Genre, Favorite = track.Favorite == true, Pinned = track.Pinned == true, Custom = track.Custom == true,
+            })
+        end
+    end
+    local ok, encoded = pcall(function() return HttpService:JSONEncode(data) end)
+    if not ok then
+        if not silent then showToast("Không thể mã hóa bản lưu") end
+        return false
+    end
+
+    -- The attribute remains a session-only fallback. A real cross-session save requires executor file APIs.
+    pcall(function() playerGui:SetAttribute(CONFIG_ATTRIBUTE, encoded) end)
+    local writeFn, readFn = getExecutorFunction("writefile"), getExecutorFunction("readfile")
+    local persisted = false
+    if writeFn and readFn then
+        local previousValid = readPersistentConfig()
+        if previousValid then pcall(writeFn, SAVE_BACKUP_FILE, previousValid) end
+        local writeOk = pcall(writeFn, SAVE_FILE, encoded)
+        if writeOk then
+            local verifyOk, verifyRaw = pcall(readFn, SAVE_FILE)
+            persisted = verifyOk and type(verifyRaw) == "string" and verifyRaw == encoded
+        end
+        if not persisted and previousValid then
+            -- A failed write should not destroy the last known-good primary save.
+            pcall(writeFn, SAVE_FILE, previousValid)
+        end
+    end
+    if not silent then
+        if persisted then
+            showToast("Đã lưu bền vững · lần sau sẽ tự khôi phục")
+        else
+            showToast("Lưu tạm trong phiên · executor không xác nhận được readfile/writefile")
+        end
+    elseif not persisted and not persistentWarningShown then
+        persistentWarningShown = true
+        showToast("Lưu chỉ trong phiên: executor chưa xác nhận được bộ nhớ tệp")
+    end
+    return persisted
+end
+controls.saveConfig = saveConfig
+local function loadConfig(silent)
+    local raw = readPersistentConfig()
+    if type(raw) ~= "string" or raw == "" then
+        local attrOk, attrRaw = pcall(function() return playerGui:GetAttribute(CONFIG_ATTRIBUTE) end)
+        if attrOk then raw = attrRaw end
+    end
+    if type(raw) ~= "string" or raw == "" then
+        if not silent then showToast("Chưa tìm thấy bản lưu · lần đầu chạy hoặc executor không hỗ trợ đọc tệp") end
+        return false
+    end
+    local ok, data = pcall(function() return HttpService:JSONDecode(raw) end)
+    if not ok or type(data) ~= "table" then
+        if not silent then showToast("Bản lưu không hợp lệ") end
+        return
+    end
+    if COLORS[data.theme] then applyTheme(data.theme) end
+    if type(data.mode) == "string" and UI.roots[data.mode] then state.mode = data.mode end
+    if type(data.motion) == "boolean" then state.motion = data.motion end
+    if data.visualizerStyle == "Vinyl" or data.visualizerStyle == "Wave" then state.visualizerStyle = data.visualizerStyle end
+    if type(data.rgbEnabled) == "boolean" then state.rgbEnabled = data.rgbEnabled end
+    if tonumber(data.rgbSpeed) then state.rgbSpeed = math.clamp(tonumber(data.rgbSpeed), 0, 1) end
+    if tonumber(data.rgbBrightness) then state.rgbBrightness = math.clamp(tonumber(data.rgbBrightness), 0, 1) end
+    if tonumber(data.uiTransparency) then state.uiTransparency = math.clamp(tonumber(data.uiTransparency), 0, 0.8) end
+    if type(data.shuffle) == "boolean" then state.shuffle = data.shuffle end
+    if type(data.repeatOn) == "boolean" then state.repeatOn = data.repeatOn end
+    state.musicVolume = math.clamp(tonumber(data.musicVolume) or 70, 0, 100)
+    state.gameVolume = math.clamp(tonumber(data.gameVolume) or 100, 0, 100)
+    if type(data.scales) == "table" then
+        for _, mode in ipairs({ "Full", "Mini", "Background" }) do state.scales[mode] = math.clamp(tonumber(data.scales[mode]) or 1, MIN_UI_SCALE, MAX_UI_SCALE) end
+    end
+    if type(data.positions) == "table" then
+        for _, mode in ipairs({ "Full", "Mini", "Background" }) do
+            local pos = data.positions[mode]
+            if type(pos) == "table" and tonumber(pos.x) and tonumber(pos.y) then
+                state.positions[mode] = Vector2.new(tonumber(pos.x), tonumber(pos.y))
+            end
+        end
+    end
+    if type(data.recent) == "table" then state.recent = data.recent end
+    state.deletedIds = {}
+    if type(data.deletedIds) == "table" then
+        for deletedId, wasDeleted in pairs(data.deletedIds) do
+            if type(deletedId) == "string" and wasDeleted == true and string.match(deletedId, "^%d+$") then
+                state.deletedIds[deletedId] = true
+            end
+        end
+    end
+    for i = #tracks, 1, -1 do
+        if state.deletedIds[tracks[i].Id] then table.remove(tracks, i) end
+    end
+    if data.page == "Genres" then
+        -- v6.x used a non-filtering Genres nav item; migrate it to All. Genre buttons set Genre directly.
+        state.page = "All"
+    elseif type(data.page) == "string" and (data.page == "All" or data.page == "Favorites" or data.page == "Recent" or data.page == "Mine" or data.page == "Genre") then
+        state.page = data.page
+    end
+    if type(data.genre) == "string" then state.genre = data.genre end
+    if type(data.miniGenre) == "string" then state.miniGenre = data.miniGenre end
+    if type(data.tracks) == "table" then
+        for _, incoming in ipairs(data.tracks) do
+            if type(incoming.Id) == "string" and string.match(incoming.Id, "^%d+$") and not state.deletedIds[incoming.Id] then
+                local genreValid = false
+                for _, allowedGenre in ipairs(GENRES) do
+                    if incoming.Genre == allowedGenre then genreValid = true; break end
+                end
+                local existing = findTrack(incoming.Id)
+                if existing then
+                    -- Saved user choices must override the catalog default when the script is run again.
+                    if type(incoming.Title) == "string" and incoming.Title ~= "" then existing.Title = incoming.Title end
+                    if genreValid then existing.Genre = incoming.Genre end
+                    existing.Duration = tonumber(incoming.Duration) or existing.Duration or 0
+                    existing.Favorite = incoming.Favorite == true or incoming.Pinned == true
+                    existing.Pinned = incoming.Pinned == true
+                    existing.Custom = incoming.Custom == true or existing.Custom == true
+                    existing.Demo = false
+                else
+                    table.insert(tracks, {
+                        Id = incoming.Id,
+                        Title = tostring(incoming.Title or ("Bài nhạc " .. incoming.Id)),
+                        Duration = tonumber(incoming.Duration) or 0,
+                        Genre = genreValid and incoming.Genre or "Khác",
+                        Favorite = incoming.Favorite == true or incoming.Pinned == true,
+                        Pinned = incoming.Pinned == true,
+                        Custom = incoming.Custom == true,
+                        Demo = false,
+                    })
+                end
+            end
+        end
+    end
+    if findTrack(tostring(data.selectedId or "")) then
+        state.selectedId = tostring(data.selectedId)
+    elseif not findTrack(state.selectedId) then
+        state.selectedId = tracks[1] and tracks[1].Id or ""
+        state.progress = 0
+        if #tracks == 0 then state.playing = false end
+    end
+    for _, mode in ipairs({ "Full", "Mini", "Background" }) do applyModeGeometry(mode) end
+    applyUITransparency()
+    if controls.applyGameVolume then controls.applyGameVolume() end
+    if updateVisualizerStyle then updateVisualizerStyle() end
+    if controls.refreshAll then controls.refreshAll() end
+    if not silent then
+        if readPersistentConfig() then showToast("Đã khôi phục dữ liệu từ tệp") else showToast("Đã tải bản lưu trong phiên") end
+    end
+    return true
+end
+controls.loadConfig = loadConfig
+
+-- =========================== GAME AUDIO LEVEL ==========================
+-- Capture individual game sounds and scale Volume on this client, while excluding sounds inside this UI.
+local function isOurSound(sound)
+    local prefix = "DGMusicPlayer"
+    return sound:IsDescendantOf(screenGui) or string.sub(sound.Name, 1, #prefix) == prefix
+end
+local function writeSoundVolume(sound, record)
+    if not sound.Parent then return end
+    local value = math.clamp(record.base * state.gameVolume / 100, 0, 10)
+    record.applied = value
+    soundVolumeGuard[sound] = true
+    pcall(function() sound.Volume = value end)
+    soundVolumeGuard[sound] = nil
+end
+local function registerGameSound(obj)
+    if not obj:IsA("Sound") or isOurSound(obj) or savedGameVolumes[obj] then return end
+    local record = { base = obj.Volume, applied = nil, changed = nil }
+    savedGameVolumes[obj] = record
+    record.changed = obj:GetPropertyChangedSignal("Volume"):Connect(function()
+        if soundVolumeGuard[obj] or not obj.Parent then return end
+        if record.applied ~= nil and math.abs(obj.Volume - record.applied) < 0.0001 then return end
+        local factor = state.gameVolume / 100
+        if factor > 0.01 then record.base = math.clamp(obj.Volume / factor, 0, 10) else record.base = obj.Volume end
+        writeSoundVolume(obj, record)
+    end)
+    table.insert(soundConnections, record.changed)
+    writeSoundVolume(obj, record)
+end
+local function scanSounds(root)
+    -- Traverse incrementally instead of allocating one massive GetDescendants() array.
+    -- This is important in large games with thousands of parts and audio objects.
+    task.spawn(function()
+        local stack = {}
+        for _, child in ipairs(root:GetChildren()) do table.insert(stack, child) end
+        local processed = 0
+        while #stack > 0 do
+            if not guiAlive then return end
+            local obj = table.remove(stack)
+            registerGameSound(obj)
+            local ok, children = pcall(function() return obj:GetChildren() end)
+            if ok then
+                for _, child in ipairs(children) do table.insert(stack, child) end
+            end
+            processed += 1
+            if processed % 70 == 0 then task.wait() end
+        end
+    end)
+end
+local function applyGameVolume()
+    local factor = math.clamp(state.gameVolume / 100, 0, 1)
+    for sound, record in pairs(savedGameVolumes) do
+        if sound and sound.Parent then
+            local target = math.clamp(record.base * factor, 0, 10)
+            -- Avoid property writes and change-signal churn when the effective volume
+            -- has not changed (especially while dragging the slider on mobile).
+            if record.applied == nil or math.abs(record.applied - target) > 0.005 then
+                writeSoundVolume(sound, record)
+            end
+        else
+            savedGameVolumes[sound] = nil
+        end
+    end
+end
+local function restoreGameVolume()
+    state.gameVolume = 100
+    for sound, record in pairs(savedGameVolumes) do
+        if sound and sound.Parent then
+            soundVolumeGuard[sound] = true
+            pcall(function() sound.Volume = record.base end)
+            soundVolumeGuard[sound] = nil
+        end
+        if record.changed then pcall(function() record.changed:Disconnect() end) end
+    end
+    table.clear(savedGameVolumes)
+    for _, connection in ipairs(soundConnections) do pcall(function() connection:Disconnect() end) end
+    table.clear(soundConnections)
+end
+controls.applyGameVolume = applyGameVolume
+controls.restoreGameVolume = restoreGameVolume
+scanSounds(SoundService); scanSounds(Workspace); scanSounds(playerGui)
+table.insert(soundConnections, SoundService.DescendantAdded:Connect(registerGameSound))
+table.insert(soundConnections, Workspace.DescendantAdded:Connect(registerGameSound))
+table.insert(soundConnections, playerGui.DescendantAdded:Connect(registerGameSound))
+player.CharacterAdded:Connect(function(character) task.defer(function() scanSounds(character) end) end)
+
+-- =============================== INPUT =================================
+UserInputService.InputChanged:Connect(function(input)
+    if not guiAlive or not dragOperation then return end
+    if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
+    local op = dragOperation
+    if op.kind == "move" then
+        local delta = input.Position - op.start
+        local x, y = clampPosition(op.mode, op.initial.X + delta.X, op.initial.Y + delta.Y)
+        state.positions[op.mode] = Vector2.new(x, y)
+        UI.roots[op.mode].Position = UDim2.fromOffset(x, y)
+    elseif op.kind == "resize" then
+        local delta = input.Position - op.start
+        local amount
+        if op.axis == "x" then amount = delta.X * (op.signX or 1)
+        elseif op.axis == "y" then amount = delta.Y * (op.signY or 1)
+        else amount = (delta.X * (op.signX or 1) + delta.Y * (op.signY or 1)) / 2 end
+        state.scales[op.mode] = math.clamp(op.initial + amount / 300, MIN_UI_SCALE, MAX_UI_SCALE)
+        applyModeGeometry(op.mode)
+    elseif op.kind == "floatingMove" then
+        local delta = input.Position - op.start
+        if not op.moved and (math.abs(delta.X) + math.abs(delta.Y) >= 7) then
+            op.moved = true
+            local target = op.target
+            target.AnchorPoint = Vector2.new(0, 0)
+            target.Position = UDim2.fromOffset(op.initial.X, op.initial.Y)
+        end
+        if op.moved and op.target and op.target.Parent then
+            local target = op.target
+            local camera = Workspace.CurrentCamera
+            local viewport = camera and camera.ViewportSize or Vector2.new(1280, 720)
+            local size = target.AbsoluteSize
+            local x = math.clamp(op.initial.X + delta.X, 4, math.max(4, viewport.X - size.X - 4))
+            local y = math.clamp(op.initial.Y + delta.Y, 4, math.max(4, viewport.Y - size.Y - 4))
+            target.Position = UDim2.fromOffset(x, y)
+            floatingMovedAt[target] = os.clock()
+        end
+    elseif op.kind == "music" then
+        updateMusicVolumeFromX(op.track, input.Position.X)
+    elseif op.kind == "gameVolume" then
+        updateGameVolumeFromX(op.track, input.Position.X)
+    elseif op.kind == "seek" then
+        updateProgressFromX(op.track, input.Position.X)
+    elseif op.kind == "modalSlider" then
+        op.callback(input.Position.X)
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if not guiAlive or not dragOperation then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        local completed = dragOperation
+        dragOperation = nil
+        if completed and (completed.kind == "music" or completed.kind == "gameVolume" or completed.kind == "resize" or completed.kind == "move" or completed.kind == "floatingMove") then
+            scheduleAutoSave()
+        end
+    end
+end)
+
+-- On screen-size changes, preserve custom placement while keeping the current panel fully visible.
+local viewportConnection
+local function hookViewport()
+    if viewportConnection then viewportConnection:Disconnect(); viewportConnection = nil end
+    local camera = Workspace.CurrentCamera
+    if not camera then return end
+    viewportConnection = camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+        for mode, _ in pairs(UI.roots) do applyModeGeometry(mode) end
+        if UI.modalBorder.Visible then fitModalToViewport() end
+    end)
+end
+hookViewport()
+Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(hookViewport)
+
+-- Ensure we don't retain duplicate connections to this UI when it is removed externally.
+screenGui.AncestryChanged:Connect(function(_, parent)
+    if parent == nil then
+        guiAlive = false
+        clearMusicSound()
+        if playbackHeartbeat then pcall(function() playbackHeartbeat:Disconnect() end) end
+        restoreGameVolume()
+        if UI.modeTween then pcall(function() UI.modeTween:Cancel() end) end
+        if UI.previousModeTween then pcall(function() UI.previousModeTween:Cancel() end) end
+        if UI.modePositionTween then pcall(function() UI.modePositionTween:Cancel() end) end
+        if UI.previousPositionTween then pcall(function() UI.previousPositionTween:Cancel() end) end
+        if UI.modeRotationTween then pcall(function() UI.modeRotationTween:Cancel() end) end
+        if UI.previousRotationTween then pcall(function() UI.previousRotationTween:Cancel() end) end
+        if UI.waveDiscTween then pcall(function() UI.waveDiscTween:Cancel() end) end
+        if viewportConnection then pcall(function() viewportConnection:Disconnect() end) end
+        for _, tween in pairs(UI.vinylTweens or {}) do pcall(function() tween:Cancel() end) end
+        for _, tween in pairs(UI.waveArtworkTweens or {}) do pcall(function() tween:Cancel() end) end
+        table.clear(UI.vinylTweens or {})
+        table.clear(UI.waveArtworkTweens or {})
+        table.clear(UI.vinylRoots or {})
+        table.clear(UI.waveArtworkRoots or {})
+        table.clear(UI.playingDiscBadges or {})
+    end
+end)
+
+-- Keep elapsed time and seek visuals synced to the actual Sound.TimePosition.
+-- ⭐ UPGRADE: visual work is throttled and hidden waveform layers are skipped to reduce mobile frame spikes.
+local progressAccumulator = 0
+local visualizationAccumulator = 0
+local rgbAccumulator = 0
+local smoothedWaveLevel = 0
+local lastVisualizerPlaybackActive = false
+playbackHeartbeat = RunService.Heartbeat:Connect(function(dt)
+    if not guiAlive then return end
+
+    local visualizerPlayingNow = isPlaybackActive()
+    if visualizerPlayingNow ~= lastVisualizerPlaybackActive then
+        lastVisualizerPlaybackActive = visualizerPlayingNow
+        syncVinylSpins()
+    end
+
+    visualizationAccumulator += dt
+    if visualizationAccumulator >= 0.06 then
+        local visualDt = visualizationAccumulator
+        visualizationAccumulator = 0
+        local active = state.visualizerStyle == "Wave" and isPlaybackActive() and musicSound ~= nil
+        if active then
+            local loudness = 0
+            pcall(function() loudness = tonumber(musicSound.PlaybackLoudness) or 0 end)
+            local target = math.clamp(loudness / 420, 0, 1)
+            smoothedWaveLevel = smoothedWaveLevel + (target - smoothedWaveLevel) * math.clamp(visualDt * 12, 0, 1)
+            local phaseTime = os.clock()
+            for index, record in ipairs(UI.circularWaveBars) do
+                local bar = record.object
+                if bar and bar.Parent and (not record.layer or record.layer.Visible) and (not record.root or record.root.Visible) then
+                    local weight = 0.62 + (math.abs(math.sin(index * 1.37)) * 0.38)
+                    -- PlaybackLoudness is the measured envelope. A low-amplitude traveling pulse
+                    -- keeps the visualizer readable on clients that report a zero loudness value.
+                    local fallbackPulse = 0.18 + (0.20 * (0.5 + 0.5 * math.sin(phaseTime * 7.0 + (record.phase or index))))
+                    local signal = math.clamp(math.max(smoothedWaveLevel * weight, fallbackPulse), 0, 1)
+                    local baseHeight = record.baseHeight or 4
+                    local maxHeight = record.maxHeight or 28
+                    local height = baseHeight + (maxHeight - baseHeight) * signal * (record.amplitude or 1)
+                    height = math.clamp(height, baseHeight, maxHeight)
+                    bar.Size = UDim2.fromOffset(record.width or 3, height)
+                    bar.Position = UDim2.fromOffset(record.cx, record.cy)
+                    if record.halo and record.halo.Parent then
+                        record.halo.Size = UDim2.fromOffset((record.width or 3) + 4, height + 4)
+                        record.halo.Position = UDim2.fromOffset(record.cx, record.cy)
+                        record.halo.BackgroundTransparency = 0.76 - signal * 0.16
+                    end
+                end
+            end
+        else
+            smoothedWaveLevel = 0
+            for _, record in ipairs(UI.circularWaveBars) do
+                local bar = record.object
+                if bar and bar.Parent and (not record.layer or record.layer.Visible) and (not record.root or record.root.Visible) then
+                    bar.Size = UDim2.fromOffset(record.width or 3, record.baseHeight or 4)
+                    bar.Position = UDim2.fromOffset(record.cx, record.cy)
+                    if record.halo and record.halo.Parent then
+                        record.halo.Size = UDim2.fromOffset((record.width or 3) + 4, (record.baseHeight or 4) + 4)
+                        record.halo.Position = UDim2.fromOffset(record.cx, record.cy)
+                        record.halo.BackgroundTransparency = 0.76
+                    end
+                end
+            end
+        end
+
+        -- ⭐ UPGRADE: Pulse/mini-EQ animation shares the existing bounded heartbeat cadence.
+        local phase = os.clock()
+        for _, ringRecord in ipairs(UI.wavePulseRings) do
+            local stroke = ringRecord.stroke
+            if stroke and stroke.Parent and (not ringRecord.layer or ringRecord.layer.Visible) and (not ringRecord.root or ringRecord.root.Visible) then
+                local pulse = 0.5 + 0.5 * math.sin(phase * 3.8 + (ringRecord.phase or 0))
+                stroke.Transparency = 0.76 - pulse * (visualizerPlayingNow and 0.22 or 0.08)
+                stroke.Thickness = (stroke.Parent.AbsoluteSize.X >= 100 and 1.5 or 1) + pulse * 0.55
+            end
+        end
+        for i = #UI.trackMiniWaveBars, 1, -1 do
+            local record = UI.trackMiniWaveBars[i]
+            local bar = record.object
+            if not bar or not bar.Parent then
+                table.remove(UI.trackMiniWaveBars, i)
+            elseif not visualizerPlayingNow then
+                -- Reset once playback stops; while playing, never touch hidden-mode EQ bars.
+                if bar.Size.Y.Offset ~= (record.baseHeight or 4) then
+                    bar.Size = UDim2.fromOffset(bar.Size.X.Offset, record.baseHeight or 4)
+                    bar.BackgroundTransparency = 0.04
+                end
+            elseif bar.Visible and bar.Parent.Visible and (not record.root or record.root.Visible) then
+                local wave = 0.5 + 0.5 * math.sin(phase * 8 + (record.phase or i))
+                local height = (record.baseHeight or 4) + ((record.maxHeight or 12) - (record.baseHeight or 4)) * wave
+                bar.Size = UDim2.fromOffset(bar.Size.X.Offset, height)
+                bar.BackgroundTransparency = 0.04 + (1 - wave) * 0.16
+            end
+        end
+    end
+
+    rgbAccumulator += dt
+    -- ⭐ UPGRADE: RGB cadence is capped at ~6.7 Hz to avoid a needless full-color write storm.
+    if rgbAccumulator >= 0.15 then
+        rgbAccumulator = 0
+        if state.rgbEnabled then applyRGBFrame() end
+    end
+
+    progressAccumulator += dt
+    if progressAccumulator < 0.12 then return end
+    progressAccumulator = 0
+    local sound = musicSound
+    if not sound or not sound.Parent or musicSoundId ~= state.selectedId then return end
+    if sound.IsLoaded then
+        local length = tonumber(sound.TimeLength) or 0
+        if length > 0 then
+            local track = selectedTrack()
+            if math.abs((tonumber(track.Duration) or 0) - length) >= 1 then
+                track.Duration = math.floor(length)
+                refreshAll()
+            end
+        end
+    end
+    if state.playing and sound.IsPlaying then
+        if playbackStatus ~= "Playing" then
+            playbackStatus = "Playing"
+            refreshTrackMetadata()
+        end
+        state.progress = math.max(0, tonumber(sound.TimePosition) or 0)
+        updateProgressDisplay()
+    end
+end)
+
+-- Capture final authored transparency values after all UI builders have finished. Some controls
+-- intentionally become transparent after theme registration; this avoids making them opaque later.
+for _, record in ipairs(UI.transparencyBindings) do
+    if record.object and record.object.Parent then
+        record.base = record.object.BackgroundTransparency
+    end
+end
+
+-- Load persistent executor storage first; an attribute is only a session fallback.
+controls.loadConfig(true)
+-- Search text is session-only so stale queries never make a restored library appear empty.
+state.fullQuery = ""
+state.miniQuery = ""
+UI.fullSearch.Text = ""
+UI.miniSearch.Text = ""
+refreshAll()
+applyModeGeometry("Full")
+applyModeGeometry("Mini")
+applyModeGeometry("Background")
+for mode, root in pairs(UI.roots) do root.Visible = (mode == state.mode) end
+updateVisualizerStyle()
+applyUITransparency()
+applyRGBFrame()
+showToast("Sẵn sàng · " .. tostring(#tracks) .. " bài · Nhấn bài hát để phát")
+if not (getExecutorFunction("readfile") and getExecutorFunction("writefile")) then
+    task.delay(2.4, function()
+        if guiAlive and not persistentWarningShown then
+            persistentWarningShown = true
+            showToast("Lưu qua lần vào game cần executor hỗ trợ readfile/writefile")
+        end
+    end)
+end
+]==]
+
+    local MusicPlayer = {
+        active = false,
+        loading = false,
+        lastError = nil,
+        injectedGuis = {},
+    }
+
+    local function mpCollectGuiRoots()
+        local roots = {}
+        pcall(function()
+            local pg = LP:FindFirstChildOfClass("PlayerGui")
+            if pg then table.insert(roots, pg) end
+        end)
+        pcall(function() table.insert(roots, game:GetService("CoreGui")) end)
+        if type(gethui) == "function" then
+            pcall(function()
+                local h = gethui()
+                if h then table.insert(roots, h) end
+            end)
+        end
+        return roots
+    end
+
+    local function mpSnapshotGuis()
+        local set = {}
+        for _, root in ipairs(mpCollectGuiRoots()) do
+            pcall(function()
+                for _, d in ipairs(root:GetDescendants()) do
+                    if d:IsA("ScreenGui") then set[d] = true end
+                end
+            end)
+        end
+        return set
+    end
+
+    local function mpDetectNewGuis(baseline)
+        local list = {}
+        for _, root in ipairs(mpCollectGuiRoots()) do
+            pcall(function()
+                for _, d in ipairs(root:GetDescendants()) do
+                    if d:IsA("ScreenGui") and not baseline[d] then
+                        table.insert(list, d)
+                    end
+                end
+            end)
+        end
+        return list
+    end
+
+    local function loadMusicPlayer()
+        if MusicPlayer.active then return true end
+        if MusicPlayer.loading then return false, "Đang load..." end
+        if type(loadstring) ~= "function" then
+            return false, "Executor thiếu loadstring"
+        end
+        local src = MUSIC_PLAYER_SOURCE
+        if type(src) ~= "string" or #src < 100 then
+            return false, "Source Music Player không hợp lệ"
+        end
+        if src:find("DÁN TOÀN BỘ CODE Music Player", 1, true) then
+            return false, "Bạn chưa thay placeholder bằng code thật"
+        end
+
+        MusicPlayer.loading = true
+        MusicPlayer.lastError = nil
+        local guiBaseline = mpSnapshotGuis()
+
+        local fn, compileErr
+        local okCompile = pcall(function()
+            fn = loadstring(src, "@Dungdx_MusicPlayer_Embedded")
+        end)
+        if not okCompile or type(fn) ~= "function" then
+            MusicPlayer.loading = false
+            MusicPlayer.lastError = "Compile lỗi: " .. tostring(compileErr or "nil")
+            return false, MusicPlayer.lastError
+        end
+
+        local okRun, runErr = pcall(fn)
+        if not okRun then
+            MusicPlayer.loading = false
+            MusicPlayer.lastError = "Runtime lỗi: " .. tostring(runErr):sub(1, 180)
+            return false, MusicPlayer.lastError
+        end
+
+        task.wait(0.45)
+        MusicPlayer.injectedGuis = mpDetectNewGuis(guiBaseline)
+        MusicPlayer.loading = false
+        MusicPlayer.active = true
+        return true
+    end
+
+    local function unloadMusicPlayer()
+        if not MusicPlayer.active and not MusicPlayer.loading then
+            return true
+        end
+        -- Music Player có handler screenGui.AncestryChanged tự restore game volume +
+        -- destroy Sound khi GUI bị Destroy. Chỉ cần destroy GUI là gỡ sạch.
+        for _, g in ipairs(MusicPlayer.injectedGuis) do
+            if g and g.Parent then
+                pcall(function() g:Destroy() end)
+            end
+        end
+        -- Fallback: quét theo tên nếu detect bỏ sót
+        for _, root in ipairs(mpCollectGuiRoots()) do
+            pcall(function()
+                local g = root:FindFirstChild("DungdxMusicPlayerUI")
+                if g then g:Destroy() end
+            end)
+        end
+        -- Dừng Sound của Music Player (prefix DGMusicPlayer)
+        pcall(function()
+            local ss = game:GetService("SoundService")
+            for _, s in ipairs(ss:GetChildren()) do
+                if s:IsA("Sound") and string.sub(s.Name, 1, 13) == "DGMusicPlayer" then
+                    pcall(function() s:Stop(); s:Destroy() end)
+                end
+            end
+        end)
+        MusicPlayer.injectedGuis = {}
+        MusicPlayer.active = false
+        MusicPlayer.loading = false
+        return true
+    end
+
+    local eMusic = mSec(extendPage, "🎵 Music Player (Dungdx UI 7.4)",
+        "Trình phát nhạc client-side · 3 chế độ Full/Mini/Dynamic", 19)
+
+    local musicStatusRow = mRow(eMusic, 1)
+    musicStatusRow.Size = UDim2.new(1, 0, 0, 56)
+
+    local musicStatusLbl = Instance.new("TextLabel", musicStatusRow)
+    musicStatusLbl.Size = UDim2.new(1, -24, 0, 20)
+    musicStatusLbl.Position = UDim2.fromOffset(12, 6)
+    musicStatusLbl.BackgroundTransparency = 1
+    musicStatusLbl.Text = "Trạng thái: Tắt"
+    musicStatusLbl.Font = Enum.Font.GothamBold
+    musicStatusLbl.TextSize = 12
+    musicStatusLbl.TextColor3 = T.Sub
+    musicStatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local musicStatusSub = Instance.new("TextLabel", musicStatusRow)
+    musicStatusSub.Size = UDim2.new(1, -24, 0, 16)
+    musicStatusSub.Position = UDim2.fromOffset(12, 30)
+    musicStatusSub.BackgroundTransparency = 1
+    musicStatusSub.Text = "Bật để mở · Tắt để gỡ hoàn toàn"
+    musicStatusSub.Font = Enum.Font.Gotham
+    musicStatusSub.TextSize = 10
+    musicStatusSub.TextColor3 = T.Sub
+    musicStatusSub.TextXAlignment = Enum.TextXAlignment.Left
+    musicStatusSub.TextWrapped = true
+
+    local musicToggleRef
+    musicToggleRef = mTog(eMusic, "Bật Music Player",
+        "Toggle điều khiển trọn vòng đời Music Player", false, 2, function(v)
+        if v then
+            musicStatusLbl.Text = "Trạng thái: Đang load..."
+            musicStatusLbl.TextColor3 = T.Accent
+            musicStatusSub.Text = "Đang khởi tạo Music Player..."
+            musicStatusSub.TextColor3 = T.Sub
+            task.spawn(function()
+                local ok, err = loadMusicPlayer()
+                if not ok then
+                    musicStatusLbl.Text = "Lỗi: " .. tostring(err):sub(1, 90)
+                    musicStatusLbl.TextColor3 = T.Danger
+                    musicStatusSub.Text = "Không chạy được Music Player"
+                    musicStatusSub.TextColor3 = T.Danger
+                    warn("[Dungdx MusicPlayer] " .. tostring(err))
+                    task.defer(function()
+                        if musicToggleRef and musicToggleRef.Sync then
+                            musicToggleRef:Sync(false)
+                        end
+                    end)
+                    return
+                end
+                musicStatusLbl.Text = "Trạng thái: Đang chạy"
+                musicStatusLbl.TextColor3 = T.Green
+                musicStatusSub.Text = "Bấm avatar nổi để mở/ẩn giao diện nhạc"
+                musicStatusSub.TextColor3 = T.Green
+            end)
+        else
+            musicStatusLbl.Text = "Trạng thái: Đang tắt..."
+            musicStatusLbl.TextColor3 = T.Accent
+            musicStatusSub.Text = "Đang gỡ Music Player..."
+            musicStatusSub.TextColor3 = T.Sub
+            task.spawn(function()
+                local ok, err = unloadMusicPlayer()
+                if not ok then
+                    musicStatusLbl.Text = "Lỗi khi tắt: " .. tostring(err):sub(1, 80)
+                    musicStatusLbl.TextColor3 = T.Danger
+                    return
+                end
+                musicStatusLbl.Text = "Trạng thái: Tắt"
+                musicStatusLbl.TextColor3 = T.Sub
+                musicStatusSub.Text = "Đã gỡ hoàn toàn · Bật lại để chạy lại"
+                musicStatusSub.TextColor3 = T.Sub
+            end)
+        end
+    end)
+
+    mBtn(eMusic, "🔄 Chạy lại Music Player",
+        "Tắt sạch rồi bật lại (dùng khi GUI bị lỗi)", "Reload", 3, function()
+        if MusicPlayer.loading then return end
+        musicStatusLbl.Text = "Trạng thái: Đang reload..."
+        musicStatusLbl.TextColor3 = T.Accent
+        task.spawn(function()
+            unloadMusicPlayer()
+            task.wait(0.25)
+            local ok, err = loadMusicPlayer()
+            if not ok then
+                musicStatusLbl.Text = "Lỗi reload: " .. tostring(err):sub(1, 80)
+                musicStatusLbl.TextColor3 = T.Danger
+                if musicToggleRef and musicToggleRef.Sync then musicToggleRef:Sync(false) end
+                return
+            end
+            musicStatusLbl.Text = "Trạng thái: Đang chạy (reload)"
+            musicStatusLbl.TextColor3 = T.Green
+            musicStatusSub.Text = "Reload thành công"
+            musicStatusSub.TextColor3 = T.Green
+            if musicToggleRef and musicToggleRef.Sync then musicToggleRef:Sync(true) end
+        end)
+    end)
+
+    FeatureControl.musicPlayerUnload = unloadMusicPlayer
  -- Auto reset khi respawn
  -- Auto reset khi respawn
     trackPersistent(LP.CharacterAdded:Connect(function()
@@ -10686,7 +15362,17 @@ print("[Dungdx Aim Trainer v11.0 - NEXUS ULTIMATE] Loaded successfully!")
         pcall(function() stopFPSCounter() end)
         pcall(function() stopSimpleShader() end)
         pcall(function() povStop() end)
-        pcall(function() if FeatureControl.pianoStop then FeatureControl.pianoStop() end end)
+                pcall(function() if FeatureControl.pianoStop then FeatureControl.pianoStop() end end)
+        pcall(function()
+            if FeatureControl.aimTrainerUnload then
+                FeatureControl.aimTrainerUnload()
+            end
+        end)
+        pcall(function()
+            if FeatureControl.musicPlayerUnload then
+                FeatureControl.musicPlayerUnload()
+            end
+        end)
         FeatureControl.stopTargetTween = nil
         if FPSCounter.gui then pcall(function() FPSCounter.gui:Destroy() end) end
     end
